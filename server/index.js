@@ -4,7 +4,7 @@ import { randomBytes } from 'node:crypto';
 import { extname, join, normalize } from 'node:path';
 import { db, hashPassword, verifyPassword, seedIfEmpty, getSettings, setSettings, SETTING_DEFAULTS } from './db.js';
 import { suggest } from './suggest.js';
-import { overview, productivity, visibleUserIds, goalLiveValue, goalProgress, addDays, iso } from './analytics.js';
+import { overview, productivity, visibleUserIds, goalLiveValue, goalProgress, addDays, iso, peopleInScope, leaderProjectIds, entryScope } from './analytics.js';
 import { startScheduler, sendReminders, sendWeeklyReport, sendTest, localNow, reminderRecipients, weeklyReportData } from './notifications.js';
 import { smtpConfigured, sendMail } from './mailer.js';
 import { buildExport, LINE_COLUMNS, SHEETS } from './exporter.js';
@@ -93,10 +93,14 @@ POST('/api/me/password', ({ user, body }) => {
 });
 
 // ---------- catalog (the picklists) ----------
-GET('/api/catalog', () => {
+GET('/api/catalog', ({ user }) => {
   const s = getSettings();
+  const pl = db.prepare('SELECT pl.project_id, u.id, u.name FROM project_leaders pl JOIN users u ON u.id=pl.user_id ORDER BY u.name').all();
+  const leadersOf = (pid) => pl.filter((r) => r.project_id === pid);
   return {
-    projects: db.prepare('SELECT id,code,name,default_scope_id,is_leave,active FROM projects ORDER BY active DESC, name').all(),
+    projects: db.prepare('SELECT id,code,name,default_scope_id,is_leave,active FROM projects ORDER BY active DESC, name').all()
+      .map((p) => ({ ...p, leader_ids: leadersOf(p.id).map((r) => r.id), leaders: leadersOf(p.id).map((r) => r.name) })),
+    my_project_ids: user.role === 'leader' ? leaderProjectIds(user.id) : null,
     task_types: db.prepare('SELECT id,name,unit_label,track_qty,is_leave,active FROM task_types ORDER BY active DESC, name').all(),
     scopes: db.prepare('SELECT id,name,active FROM scopes ORDER BY active DESC, name').all(),
     levels: db.prepare('SELECT id,rank,name,description FROM levels ORDER BY rank').all(),
@@ -104,6 +108,14 @@ GET('/api/catalog', () => {
     pending_proposals: db.prepare("SELECT COUNT(*) n FROM project_proposals WHERE status='pending'").get().n,
   };
 });
+function setProjectLeaders(pid, raw) {
+  if (raw === undefined) return;
+  const ids = [...new Set((Array.isArray(raw) ? raw : String(raw).split(',')).map(Number).filter(Number.isInteger))];
+  for (const id of ids) if (!db.prepare("SELECT 1 FROM users WHERE id=? AND role='leader'").get(id)) throw bad('Only team leaders can be assigned to a project');
+  db.prepare('DELETE FROM project_leaders WHERE project_id=?').run(pid);
+  const ins = db.prepare('INSERT INTO project_leaders (project_id,user_id) VALUES (?,?)');
+  ids.forEach((u) => ins.run(pid, u));
+}
 const projectScope = (body) => {
   const id = body.default_scope_id ? Number(body.default_scope_id) : null;
   if (!id && !flag(body.is_leave, 0)) throw bad('Choose the project scope');
@@ -111,9 +123,17 @@ const projectScope = (body) => {
   return id;
 };
 POST('/api/projects', ({ user, body }) => { requireRole(user, 'admin');
-  return { id: uniq(() => Number(db.prepare('INSERT INTO projects (name,code,default_scope_id,is_leave) VALUES (?,?,?,?)').run(str(body.name, 'name', { required: true, max: 120 }), str(body.code, 'code', { max: 30 }), projectScope(body), flag(body.is_leave, 0)).lastInsertRowid)) }; });
+  db.exec('BEGIN');
+  try {
+    const id = uniq(() => Number(db.prepare('INSERT INTO projects (name,code,default_scope_id,is_leave) VALUES (?,?,?,?)').run(str(body.name, 'name', { required: true, max: 120 }), str(body.code, 'code', { max: 30 }), projectScope(body), flag(body.is_leave, 0)).lastInsertRowid));
+    setProjectLeaders(id, body.leader_ids); db.exec('COMMIT'); return { id };
+  } catch (e) { db.exec('ROLLBACK'); throw e; } });
 PUT('/api/projects/:id', ({ user, body, params }) => { requireRole(user, 'admin');
-  uniq(() => db.prepare('UPDATE projects SET name=?,code=?,default_scope_id=?,is_leave=?,active=? WHERE id=?').run(str(body.name, 'name', { required: true, max: 120 }), str(body.code, 'code', { max: 30 }), projectScope(body), flag(body.is_leave, 0), flag(body.active), params.id)); return { ok: true }; });
+  db.exec('BEGIN');
+  try {
+    uniq(() => db.prepare('UPDATE projects SET name=?,code=?,default_scope_id=?,is_leave=?,active=? WHERE id=?').run(str(body.name, 'name', { required: true, max: 120 }), str(body.code, 'code', { max: 30 }), projectScope(body), flag(body.is_leave, 0), flag(body.active), params.id));
+    setProjectLeaders(Number(params.id), body.leader_ids); db.exec('COMMIT'); return { ok: true };
+  } catch (e) { db.exec('ROLLBACK'); throw e; } });
 POST('/api/task_types', ({ user, body }) => { requireRole(user, 'admin');
   return { id: uniq(() => Number(db.prepare('INSERT INTO task_types (name,unit_label,track_qty,is_leave) VALUES (?,?,?,?)').run(str(body.name, 'name', { required: true, max: 80 }), str(body.unit_label, 'unit', { max: 30 }) || 'item', flag(body.track_qty, 0), flag(body.is_leave, 0)).lastInsertRowid)) }; });
 PUT('/api/task_types/:id', ({ user, body, params }) => { requireRole(user, 'admin');
@@ -157,6 +177,7 @@ async function decide(user, id, approve, body) {
     scope_id = num(body.scope_id ?? pp.scope_id, 'scope', { int: true });
     if (!db.prepare('SELECT 1 FROM scopes WHERE id=?').get(scope_id)) throw bad('Unknown scope');
     project_id = uniq(() => Number(db.prepare('INSERT INTO projects (name,default_scope_id) VALUES (?,?)').run(name, scope_id).lastInsertRowid));
+    if (body.assign_leader !== false && getUser(pp.proposed_by).role === 'leader') db.prepare('INSERT OR IGNORE INTO project_leaders (project_id,user_id) VALUES (?,?)').run(project_id, pp.proposed_by);
   }
   const reason = str(body.reason, 'reason', { max: 500 });
   db.prepare("UPDATE project_proposals SET status=?, decided_by=?, decided_at=datetime('now'), reason=?, project_id=?, name=?, scope_id=? WHERE id=?")
@@ -255,7 +276,7 @@ GET('/api/users', ({ user }) => {
      FROM users u LEFT JOIN levels l ON l.id=u.level_id WHERE u.id IN (${ids.map(() => '?').join(',') || 'NULL'}) ORDER BY u.active DESC, u.name`).all(from, to, ...ids);
   return { users: rows.map((r) => ({ ...publicUser(r), level: r.level, last_entry: r.last_entry, days_30d: r.days_30d })) };
 });
-GET('/api/leaders', ({ user }) => { requireRole(user, 'admin'); return { leaders: db.prepare("SELECT id,name FROM users WHERE role IN ('leader','admin') AND active=1 ORDER BY name").all() }; });
+GET('/api/leaders', ({ user }) => { requireRole(user, 'admin'); return { leaders: db.prepare("SELECT id,name,role FROM users WHERE role IN ('leader','admin') AND active=1 ORDER BY name").all() }; });
 POST('/api/users', ({ user, body }) => {
   requireRole(user, 'admin');
   const username = str(body.username, 'username', { required: true, max: 50 });
@@ -293,7 +314,15 @@ PUT('/api/users/:id', ({ user, body, params }) => {
 });
 
 // ---------- dashboard ----------
-GET('/api/dash/overview', ({ user, query }) => { requireRole(user, 'admin', 'leader'); const { from, to } = range(query); return { from, to, ...overview(user, from, to) }; });
+GET('/api/dash/overview', ({ user, query }) => {
+  requireRole(user, 'admin', 'leader'); const { from, to } = range(query);
+  return { from, to, ...overview(user, from, to, { projectId: query.project_id ? Number(query.project_id) : null }) };
+});
+GET('/api/dash/people', ({ user, query }) => {
+  requireRole(user, 'admin', 'leader'); const { from, to } = range(query);
+  const ids = peopleInScope(user, from, to);
+  return { people: ids.length ? db.prepare(`SELECT id,name FROM users WHERE id IN (${ids.map(() => '?').join(',')}) AND role<>'admin' ORDER BY name`).all(...ids) : [] };
+});
 GET('/api/dash/productivity', ({ user, query }) => {
   requireRole(user, 'admin', 'leader');
   const { from, to } = range(query);
@@ -370,7 +399,7 @@ function growth(viewer, uid) {
   const effort = (p) => db.prepare(`SELECT t.id task_type_id, t.name task_type, ROUND(SUM(e.days),2) days FROM entries e JOIN task_types t ON t.id=e.task_type_id
     WHERE e.user_id=? AND e.work_date BETWEEN ? AND ? AND t.is_leave=0 GROUP BY t.id ORDER BY days DESC`).all(...p);
   const prev = Object.fromEntries(effort(p0).map((r) => [r.task_type_id, r.days]));
-  const speed = Object.fromEntries(productivity(viewer, p1[1], to, { userId: uid }).by_person_task.map((r) => [r.task_type_id, r]));
+  const speed = Object.fromEntries(productivity({ role: 'admin' }, p1[1], to, { userId: uid }).by_person_task.map((r) => [r.task_type_id, r]));
   const skills = effort(p1).map((r) => ({ ...r, prev_days: prev[r.task_type_id] ?? null, units: speed[r.task_type_id]?.units ?? null, unit: speed[r.task_type_id]?.unit ?? null,
     hrs_per_unit: speed[r.task_type_id]?.hrs_per_unit ?? null, team_hrs_per_unit: speed[r.task_type_id]?.team_hrs_per_unit ?? null }));
   const totals = db.prepare(`SELECT COALESCE(ROUND(SUM(CASE WHEN p.is_leave=0 THEN e.days END),1),0) days, COALESCE(SUM(e.quantity),0) units, COUNT(DISTINCT e.work_date) active_days

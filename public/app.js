@@ -47,6 +47,7 @@ function formDialog({ title, fields, values = {}, submit = 'Save', danger }) {
       const common = `name="${esc(f.name)}" id="f_${esc(f.name)}" ${f.required ? 'required' : ''}`;
       if (f.type === 'select') return html`<select ${raw(common)}>${f.options.map((o) => html`<option value="${o.value}" ${String(o.value) === String(v) ? raw('selected') : ''}>${o.label}</option>`)}</select>`;
       if (f.type === 'textarea') return html`<textarea ${raw(common)}>${v}</textarea>`;
+      if (f.type === 'checks') return f.options.length ? html`<div class="chips">${f.options.map((o) => { const on = (v || []).map(String).includes(String(o.value)); return html`<label class="chip ${on ? 'on' : ''}" style="cursor:pointer"><input type="checkbox" name="${f.name}" value="${o.value}" ${on ? raw('checked') : ''} style="display:none" onchange="this.parentNode.classList.toggle('on',this.checked)">${o.label}</label>`; })}</div>` : html`<div class="small muted">${f.empty || 'Nothing to choose yet.'}</div>`;
       if (f.type === 'checkbox') return html`<label class="row"><input type="checkbox" ${raw(common)} ${v ? raw('checked') : ''} style="width:22px;height:22px"> <span>${f.label}</span></label>`;
       return html`<input type="${f.type || 'text'}" ${raw(common)} value="${v}" ${f.step ? raw(`step="${f.step}"`) : ''} ${f.autocomplete ? raw(`autocomplete="${f.autocomplete}"`) : ''}>`;
     };
@@ -61,7 +62,7 @@ function formDialog({ title, fields, values = {}, submit = 'Save', danger }) {
     form.onsubmit = (e) => {
       e.preventDefault();
       const out = {};
-      for (const f of fields) { const el = form.elements[f.name]; out[f.name] = f.type === 'checkbox' ? el.checked : el.value; }
+      for (const f of fields) { if (f.type === 'checks') { out[f.name] = [...form.querySelectorAll(`input[name="${f.name}"]:checked`)].map((i) => Number(i.value)); continue; } const el = form.elements[f.name]; out[f.name] = f.type === 'checkbox' ? el.checked : el.value; }
       done(out);
     };
     dlg.showModal();
@@ -82,6 +83,8 @@ const activeProjects = () => catalog.projects.filter((p) => p.active && !p.is_le
 const workTasks = () => catalog.task_types.filter((t) => t.active && !t.is_leave);
 const activeScopes = () => catalog.scopes.filter((s) => s.active);
 const byId = (arr, id) => arr.find((x) => x.id === Number(id));
+// projects whose data this viewer can analyse (leaders: the ones assigned to them)
+const scopedProjects = () => catalog.projects.filter((p) => !p.is_leave && (!catalog.my_project_ids || catalog.my_project_ids.includes(p.id)));
 
 // ---------- shell ----------
 const NAV = [
@@ -284,7 +287,7 @@ async function viewGrowth(id) {
 }
 
 // ---------- DASHBOARD ----------
-const D = { days: 30 };
+const D = { days: 30, project: null };
 const rangeSel = (act, cur) => html`<select data-change="${act}" style="width:auto">${[[7, 'Last 7 days'], [30, 'Last 30 days'], [90, 'Last 90 days'], [180, 'Last 6 months']].map(([d, l]) => html`<option value="${d}" ${cur === d ? raw('selected') : ''}>${l}</option>`)}</select>`;
 const bars = (rows, { label, value, text, cls = () => '' }) => {
   const max = Math.max(...rows.map(value), 0.0001);
@@ -300,19 +303,24 @@ function dayChart(byDay, from, to) {
 async function viewDash() {
   shell('dash', html`<div class="empty">Loading…</div>`);
   const to = today(), from = addDays(to, -(D.days - 1));
-  const o = await get('/dash/overview' + qs({ from, to }));
+  const mine = scopedProjects();
+  if (catalog.my_project_ids && !mine.length) return mount($('#view'), html`<h1>Dashboard</h1><div class="card empty"><b>No projects assigned to you yet.</b><br>When the admin assigns you as team leader of a project, its team performance appears here.</div>`);
+  if (D.project && !mine.some((p) => p.id === D.project)) D.project = null;
+  const o = await get('/dash/overview' + qs({ from, to, project_id: D.project }));
   const t = o.totals, behind = o.people.filter((p) => p.missing.length || p.partial.length).sort((a, b) => b.missing.length - a.missing.length);
   const tasks = o.by_task.slice(0, 8), people = o.by_person;
   const mx = Object.fromEntries(o.matrix.map((r) => [`${r.user_id}|${r.task_type_id}`, r.days]));
   const mmax = Math.max(...o.matrix.map((r) => r.days), 0.0001);
-  mount($('#view'), html`<div class="row sp"><h1>Dashboard</h1>${rangeSel('dashRange', D.days)}</div>
+  const projSel = html`<select data-change="dashProject" style="width:auto;max-width:100%"><option value="">${catalog.my_project_ids ? 'All my projects' : 'All projects'}</option>${mine.map((p) => html`<option value="${p.id}" ${D.project === p.id ? raw('selected') : ''}>${p.name}</option>`)}</select>`;
+  mount($('#view'), html`<div class="row sp"><h1>Dashboard${D.project ? html` <span class="muted" style="font-weight:500">· ${byId(catalog.projects, D.project)?.name}</span>` : ''}</h1><div class="row">${projSel}${rangeSel('dashRange', D.days)}</div></div>
+    ${catalog.my_project_ids ? html`<p class="small muted" style="margin-top:-6px">Showing everyone's work on the projects you lead: ${mine.map((p) => p.name).join(', ')}.</p>` : ''}
     <div class="grid g4"><div class="kpi"><b>${fmtD(t.days)}</b><span>working days logged</span></div><div class="kpi"><b>${fmtD(t.leave_days)}</b><span>days off / leave</span></div>
       <div class="kpi"><b>${t.people}</b><span>people logging</span></div><div class="kpi"><b>${behind.length}</b><span>need follow-up</span></div></div>
     ${behind.length ? html`<div class="card" style="margin-top:14px;border-color:var(--warn)"><h2>⚠ Needs follow-up <span class="muted small">(workdays with nothing logged or less than 1 day)</span></h2>
-      <div class="tscroll"><table><tr><th>Person</th><th class="right">Complete</th><th>Missing days</th><th>Partial</th></tr>
+      <div class="tscroll"><table><tr><th>Person</th><th class="right">Complete</th><th>Missing days</th><th>Partial days</th></tr>
       ${behind.map((p) => html`<tr><td><a href="#/growth/${p.id}"><b>${p.name}</b></a>${p.email ? '' : html` <span class="tag warn">no email</span>`}</td><td class="right">${p.complete}/${p.expected}</td>
-        <td>${p.missing.slice(-6).map((d) => html`<span class="tag bad" style="margin:1px">${shortDate(d)}</span>`)}${p.missing.length > 6 ? html` <span class="muted small">+${p.missing.length - 6} earlier</span>` : ''}</td>
-        <td>${p.partial.slice(-4).map((x) => html`<span class="tag warn" style="margin:1px">${shortDate(x.date)} ${fmtD(x.days)}</span>`)}</td></tr>`)}</table></div></div>`
+        <td>${p.missing.length ? html`<b>${p.missing.length}</b> <span class="small muted">— latest ${p.missing.slice(-3).map(shortDate).join(', ')}</span>` : '–'}</td>
+        <td>${p.partial.length ? html`<b>${p.partial.length}</b> <span class="small muted">— latest ${p.partial.slice(-2).map((x) => `${shortDate(x.date)} (${fmtD(x.days)})`).join(', ')}</span>` : '–'}</td></tr>`)}</table></div></div>`
       : html`<div class="card" style="margin-top:14px"><b>✓ Everyone is up to date in this period.</b></div>`}
     <div class="card"><h2>Days logged per day (whole team)</h2>${dayChart(o.by_day, o.from, o.to)}</div>
     <div class="grid g2">
@@ -332,7 +340,7 @@ async function viewProd() {
   const to = today(), from = addDays(to, -(P.days - 1));
   const tracked = catalog.task_types.filter((t) => t.track_qty && t.active);
   if (!P.task || !byId(tracked, P.task)) P.task = tracked.find((t) => /shop/i.test(t.name))?.id || tracked[0]?.id;
-  const [data, users] = await Promise.all([get('/dash/productivity' + qs({ from, to, task_type_id: P.task, project_id: P.project, user_id: P.user })), get('/users')]);
+  const [data, ppl] = await Promise.all([get('/dash/productivity' + qs({ from, to, task_type_id: P.task, project_id: P.project, user_id: P.user })), get('/dash/people' + qs({ from, to }))]);
   const tt = byId(catalog.task_types, P.task), unit = tt?.unit_label || 'unit', teamRow = data.team[0];
   const persons = [...data.by_person_task].sort((a, b) => a.hrs_per_unit - b.hrs_per_unit), projs = [...data.by_project_task].sort((a, b) => a.hrs_per_unit - b.hrs_per_unit);
   const tr = data.trend, tmax = Math.max(...tr.map((x) => x.hrs_per_unit), 0.0001), W = 600, H = 100, PADX = 8;
@@ -340,8 +348,8 @@ async function viewProd() {
   const sel = (id, opts, cur) => html`<select data-change="${id}" style="width:auto;max-width:100%">${opts.map(([v, l]) => html`<option value="${v}" ${String(cur ?? '') === String(v) ? raw('selected') : ''}>${l}</option>`)}</select>`;
   mount($('#view'), html`<h1>Speed per unit</h1>
     <p class="muted small">Hours to produce one drawing / RFI / family, learned from lines where people enter “how many”. Hours = days × ${data.hours_per_day}.</p>
-    <div class="row" style="margin-bottom:14px">${sel('prodTask', tracked.map((t) => [t.id, t.name]), P.task)}${sel('prodProject', [['', 'All projects'], ...catalog.projects.filter((p) => !p.is_leave).map((p) => [p.id, p.name])], P.project)}
-      ${sel('prodUser', [['', 'Everyone'], ...users.users.filter((u) => u.role !== 'admin').map((u) => [u.id, u.name])], P.user)}${sel('prodRange', [[90, 'Last 90 days'], [180, 'Last 6 months'], [365, 'Last year']], P.days)}</div>
+    <div class="row" style="margin-bottom:14px">${sel('prodTask', tracked.map((t) => [t.id, t.name]), P.task)}${sel('prodProject', [['', catalog.my_project_ids ? 'All my projects' : 'All projects'], ...scopedProjects().map((p) => [p.id, p.name])], P.project)}
+      ${sel('prodUser', [['', 'Everyone'], ...ppl.people.map((u) => [u.id, u.name])], P.user)}${sel('prodRange', [[90, 'Last 90 days'], [180, 'Last 6 months'], [365, 'Last year']], P.days)}</div>
     ${teamRow ? html`<div class="grid g4"><div class="kpi"><b>${fmtH(teamRow.hrs_per_unit)}</b><span>avg per ${unit}</span></div><div class="kpi"><b>${(1 / teamRow.hrs_per_unit).toFixed(2)}</b><span>${unit}s per hour</span></div>
       <div class="kpi"><b>${teamRow.units}</b><span>${unit}s counted</span></div><div class="kpi"><b>${teamRow.entries}</b><span>entries with a count</span></div></div>
     <div class="card" style="margin-top:14px"><h2>Weekly trend — hours per ${unit}</h2>
@@ -389,7 +397,8 @@ async function viewProjects() {
         <div class="row" style="margin-top:12px"><button class="btn primary" type="submit">Send proposal</button></div></form>
         <div class="card"><h2>My proposals</h2>${proposals.length ? proposals.map((p) => row(p)) : html`<div class="empty">You haven't proposed any project yet.</div>`}</div>`}
     ${admin && decided.length ? html`<div class="card"><h2>Decided</h2>${decided.slice(0, 30).map((p) => row(p))}</div>` : ''}
-    <div class="card"><h2>Active projects</h2><div class="tscroll"><table><tr><th>Project</th><th>Scope</th></tr>${catalog.projects.filter((p) => p.active && !p.is_leave).map((p) => html`<tr><td>${p.name}</td><td>${scopeName(p.default_scope_id)}</td></tr>`)}</table></div></div>`);
+    ${catalog.my_project_ids ? html`<div class="card"><h2>Projects I lead</h2>${scopedProjects().length ? html`<div class="chips">${scopedProjects().map((p) => html`<a class="chip" href="#/dash/${p.id}">▦ ${p.name}</a>`)}</div><p class="small muted" style="margin-top:8px">Tap a project to open its team dashboard.</p>` : html`<div class="empty">No projects assigned to you yet — the admin assigns team leaders to projects.</div>`}</div>` : ''}
+    <div class="card"><h2>Active projects</h2><div class="tscroll"><table><tr><th>Project</th><th>Scope</th><th>Team leader</th>${admin ? html`<th></th>` : ''}</tr>${catalog.projects.filter((p) => p.active && !p.is_leave).map((p) => html`<tr><td>${p.name}</td><td>${scopeName(p.default_scope_id)}</td><td>${p.leaders?.join(', ') || html`<span class="muted">–</span>`}</td>${admin ? html`<td class="right"><button class="btn sm" data-act="projEditHere" data-id="${p.id}">Edit</button></td>` : ''}</tr>`)}</table></div></div>`);
   const f = $('#propForm');
   if (f) f.onsubmit = async (e) => {
     e.preventDefault();
@@ -414,12 +423,12 @@ function presetRange(k) {
 }
 async function viewExport() {
   shell('export', html`<div class="empty">Loading…</div>`);
-  const [opt, { users }] = await Promise.all([get('/export/options'), get('/users')]);
+  const [opt, { people: users }] = await Promise.all([get('/export/options'), get('/dash/people' + qs({ from: addDays(today(), -365), to: today() }))]);
   const saved = exLoad(), [df, dt] = presetRange('month');
   const st = { from: df, to: dt, format: saved.format || 'xlsx', columns: saved.columns || opt.columns.filter((c) => c.def).map((c) => c.key),
     sheets: saved.sheets || opt.sheets.filter((c) => c.def).map((c) => c.key), users: [], projects: [] };
-  const people = users.filter((u) => u.role !== 'admin' || u.id === me.id);
-  const projs = catalog.projects.filter((p) => !p.is_leave);
+  const people = users;
+  const projs = scopedProjects();
   const chk = (group, key, label, on, disabled) => html`<label class="chip ${on ? 'on' : ''}" style="cursor:pointer;${disabled ? 'opacity:.45;pointer-events:none' : ''}"><input type="checkbox" data-g="${group}" value="${key}" ${on ? raw('checked') : ''} style="display:none">${label}</label>`;
   const draw = () => {
     const csv = st.format === 'csv';
@@ -503,7 +512,7 @@ async function viewSetup() {
     ${items.length ? items.map((i) => html`<div class="row sp" style="padding:8px 0;border-bottom:1px solid var(--line);${i.active === 0 ? 'opacity:.5' : ''}"><div>${i.name}<div class="small muted">${sub(i)}</div></div><button class="btn sm" data-act="${editAct}" data-id="${i.id}">Edit</button></div>`) : html`<div class="empty">None yet</div>`}</div>`;
   mount($('#view'), html`<h1>Setup</h1>
     <p class="muted">These lists feed the quick-pick buttons on the timesheet. Archive instead of deleting so history is kept.</p>
-    ${list('Projects', catalog.projects, 'projAdd', 'projEdit', (p) => `default scope: ${byId(catalog.scopes, p.default_scope_id)?.name || '–'}${p.is_leave ? ' · leave' : ''}${p.active ? '' : ' · archived'}`)}
+    ${list('Projects', catalog.projects, 'projAdd', 'projEdit', (p) => `scope: ${byId(catalog.scopes, p.default_scope_id)?.name || '–'}${p.leaders?.length ? ' · leader: ' + p.leaders.join(', ') : p.is_leave ? '' : ' · no leader'}${p.is_leave ? ' · leave' : ''}${p.active ? '' : ' · archived'}`)}
     ${list('Task items', catalog.task_types, 'taskAdd', 'taskEdit', (t) => `${t.track_qty ? `asks “how many ${t.unit_label}s?”` : 'time only'}${t.is_leave ? ' · leave' : ''}${t.active ? '' : ' · archived'}`)}
     ${list('Scopes', catalog.scopes, 'scopeAdd', 'scopeEdit', (s) => (s.active ? '' : 'archived'))}
     ${list('Career levels', catalog.levels.map((l) => ({ ...l, active: 1 })), 'lvlAdd', 'lvlEdit', (l) => `#${l.rank} · ${l.description}`)}`);
@@ -543,7 +552,7 @@ const actions = {
   },
   propApprove: async (el) => {
     const p = window._proposals.find((x) => x.id === Number(el.dataset.id));
-    const v = await formDialog({ title: 'Approve project', submit: 'Approve & create', fields: [fld('name', 'Project name', { required: true }), fld('scope_id', 'Scope', { type: 'select', options: scopeOpts('— choose scope —') }), fld('reason', 'Message to the leader (optional)')], values: { name: p.name, scope_id: p.scope_id } });
+    const v = await formDialog({ title: 'Approve project', submit: 'Approve & create', fields: [fld('name', 'Project name', { required: true }), fld('scope_id', 'Scope', { type: 'select', options: scopeOpts('— choose scope —') }), fld('assign_leader', `Make ${p.proposed_by_name} the team leader of this project`, { type: 'checkbox' }), fld('reason', 'Message to the leader (optional)')], values: { name: p.name, scope_id: p.scope_id, assign_leader: true } });
     if (v && await attempt(() => post(`/proposals/${p.id}/approve`, v), `“${v.name}” created`)) viewProjects();
   },
   propReject: async (el) => {
@@ -551,6 +560,7 @@ const actions = {
     if (v && await attempt(() => post(`/proposals/${el.dataset.id}/reject`, v), 'Rejected')) viewProjects();
   },
   projAddHere: () => projectForm(null, viewProjects),
+  projEditHere: (el) => projectForm(byId(catalog.projects, el.dataset.id), viewProjects),
   exPreset: (el) => { const x = window._ex; [x.st.from, x.st.to] = presetRange(el.dataset.k); x.draw(); },
   exColsDefault: () => { const x = window._ex; x.st.columns = x.opt.columns.filter((c) => c.def).map((c) => c.key); exSave({ format: x.st.format, columns: x.st.columns, sheets: x.st.sheets }); x.draw(); },
   exGo: async (el) => {
@@ -592,9 +602,11 @@ const actions = {
 };
 const scopeOpts = (none = '—') => [{ value: '', label: none }, ...catalog.scopes.filter((s) => s.active).map((s) => ({ value: s.id, label: s.name }))];
 async function projectForm(p, after = viewSetup) {
+  const leaders = (await get('/leaders')).leaders.filter((l) => l.role === 'leader');
   const v = await formDialog({ title: p ? 'Edit project' : 'New project', fields: [fld('name', 'Project name', { required: true }), fld('code', 'Code (optional)'),
-    fld('default_scope_id', 'Scope', { type: 'select', options: scopeOpts('— choose scope —'), help: 'Filled in automatically for everyone who logs time on this project.' }), fld('is_leave', 'This is a leave / day-off item', { type: 'checkbox' }), ...(p ? [fld('active', 'Active (shown on timesheet)', { type: 'checkbox' })] : [])],
-    values: p ? { ...p, default_scope_id: p.default_scope_id ?? '', active: !!p.active, is_leave: !!p.is_leave } : {} });
+    fld('default_scope_id', 'Scope', { type: 'select', options: scopeOpts('— choose scope —'), help: 'Filled in automatically for everyone who logs time on this project.' }),
+    fld('leader_ids', 'Team leader(s) monitoring this project', { type: 'checks', options: leaders.map((l) => ({ value: l.id, label: l.name })), empty: 'No team leaders yet — set Access = Team leader on the Team page.', help: 'They see this project on their Dashboard, Speed and Export.' }), fld('is_leave', 'This is a leave / day-off item', { type: 'checkbox' }), ...(p ? [fld('active', 'Active (shown on timesheet)', { type: 'checkbox' })] : [])],
+    values: p ? { ...p, default_scope_id: p.default_scope_id ?? '', active: !!p.active, is_leave: !!p.is_leave } : { leader_ids: [] } });
   if (v && await attempt(() => (p ? put('/projects/' + p.id, v) : post('/projects', v)), 'Saved')) after();
 }
 async function taskForm(t) {
@@ -652,6 +664,7 @@ document.addEventListener('change', (e) => {
   const a = e.target.dataset?.change; if (!a) return;
   const v = e.target.value;
   if (a === 'dashRange') { D.days = Number(v); viewDash(); }
+  else if (a === 'dashProject') { D.project = v ? Number(v) : null; viewDash(); }
   else if (a === 'prodRange') { P.days = Number(v); viewProd(); }
   else if (a === 'prodTask') { P.task = Number(v); viewProd(); }
   else if (a === 'prodProject') { P.project = v ? Number(v) : null; viewProd(); }
@@ -669,7 +682,7 @@ async function route() {
     if (page === 'log') await viewLog();
     else if (page === 'history') await viewHistory();
     else if (page === 'growth') await viewGrowth(arg);
-    else if (page === 'dash') await viewDash();
+    else if (page === 'dash') { if (arg) D.project = Number(arg) || null; await viewDash(); }
     else if (page === 'prod') await viewProd();
     else if (page === 'team') await viewTeam();
     else if (page === 'emails') await viewEmails();

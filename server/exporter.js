@@ -2,7 +2,7 @@
 // Respects visibility: admin = everyone, leader = own team, member = self.
 import writeExcelFile from 'write-excel-file/node';
 import { db, getSettings } from './db.js';
-import { visibleUserIds, compliance } from './analytics.js';
+import { compliance, entryScope, peopleInScope } from './analytics.js';
 
 // Columns of the "Timesheet" sheet; defaults mirror the old Excel layout and order.
 export const LINE_COLUMNS = [
@@ -35,14 +35,16 @@ const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 const inList = (a) => a.map(() => '?').join(',') || 'NULL';
 
 function query(viewer, { from, to, userIds, projectIds }) {
-  let ids = visibleUserIds(viewer);
-  if (userIds?.length) ids = ids.filter((i) => userIds.includes(i));
-  const P = [...ids, from, to];
+  const sc = entryScope(viewer), P = [...sc.params, from, to];
   let extra = '';
-  if (projectIds?.length) { extra = ` AND e.project_id IN (${inList(projectIds)})`; P.push(...projectIds); }
+  if (userIds?.length) { extra += ` AND e.user_id IN (${inList(userIds)})`; P.push(...userIds); }
+  if (projectIds?.length) { extra += ` AND e.project_id IN (${inList(projectIds)})`; P.push(...projectIds); }
   const lines = db.prepare(`SELECT e.*, u.name member, u.email, u.team, p.name project, p.is_leave, t.name task_item, t.unit_label unit, s.name scope
     FROM entries e JOIN users u ON u.id=e.user_id JOIN projects p ON p.id=e.project_id JOIN task_types t ON t.id=e.task_type_id LEFT JOIN scopes s ON s.id=e.scope_id
-    WHERE e.user_id IN (${inList(ids)}) AND e.work_date BETWEEN ? AND ?${extra} ORDER BY e.work_date, u.name, e.task_seq`).all(...P);
+    WHERE ${sc.sql} AND e.work_date BETWEEN ? AND ?${extra} ORDER BY e.work_date, u.name, e.task_seq`).all(...P);
+  // people for the "missing days" sheet: those in scope (and in the chosen people filter)
+  let ids = peopleInScope(viewer, from, to, projectIds?.length === 1 ? projectIds[0] : undefined);
+  if (userIds?.length) ids = ids.filter((i) => userIds.includes(i));
   return { ids, lines };
 }
 

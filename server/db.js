@@ -106,6 +106,12 @@ CREATE TABLE IF NOT EXISTS outbox (
   kind TEXT NOT NULL, to_addr TEXT NOT NULL, subject TEXT NOT NULL, html TEXT NOT NULL,
   status TEXT NOT NULL, error TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+-- which team leader(s) monitor which project (a project can have several leaders, a leader several projects)
+CREATE TABLE IF NOT EXISTS project_leaders (
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  PRIMARY KEY (project_id, user_id)
+);
 -- team leaders propose new projects; only the admin turns a proposal into a real project
 CREATE TABLE IF NOT EXISTS project_proposals (
   id INTEGER PRIMARY KEY,

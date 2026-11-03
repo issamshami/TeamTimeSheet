@@ -14,6 +14,27 @@ export function visibleUserIds(viewer) {
 }
 const inList = (ids) => ids.map(() => '?').join(',') || 'NULL';
 
+export const leaderProjectIds = (uid) => db.prepare('SELECT project_id FROM project_leaders WHERE user_id=?').all(uid).map((r) => r.project_id);
+/**
+ * Which timesheet lines a viewer may analyse. admin: all; leader: every line on the projects assigned to them
+ * (whoever logged it); member: their own lines. Career data (goals, notes) is NOT governed by this — see visibleUserIds.
+ */
+export function entryScope(viewer, a = 'e') {
+  if (viewer.role === 'admin') return { sql: '1=1', params: [] };
+  if (viewer.role === 'leader') { const p = leaderProjectIds(viewer.id); return { sql: `${a}.project_id IN (${inList(p)})`, params: p }; }
+  return { sql: `${a}.user_id=?`, params: [viewer.id] };
+}
+/** People a viewer follows up on: admin → everyone; leader → direct reports + anyone who logged on their projects in the period. */
+export function peopleInScope(viewer, from, to, projectId) {
+  if (viewer.role === 'admin' && !projectId) return visibleUserIds(viewer);
+  const sc = entryScope(viewer), P = [...sc.params, from, to];
+  let q = `SELECT DISTINCT e.user_id id FROM entries e WHERE ${sc.sql} AND e.work_date BETWEEN ? AND ?`;
+  if (projectId) { q += ' AND e.project_id=?'; P.push(projectId); }
+  const ids = new Set(db.prepare(q).all(...P).map((r) => r.id));
+  if (viewer.role === 'leader' && !projectId) visibleUserIds(viewer).forEach((i) => ids.add(i));
+  return [...ids];
+}
+
 /** Calendar dates in [from,to] whose weekday (0=Sun) is in `workdays`. */
 export function workdaysBetween(from, to, workdays) {
   const out = [];
@@ -42,9 +63,11 @@ export function compliance(userIds, from, to, settings = getSettings()) {
   });
 }
 
-export function overview(viewer, from, to) {
-  const ids = visibleUserIds(viewer), L = inList(ids), P = [...ids, from, to];
-  const base = `e.user_id IN (${L}) AND e.work_date BETWEEN ? AND ?`;
+export function overview(viewer, from, to, { projectId } = {}) {
+  const sc = entryScope(viewer), P = [...sc.params, from, to];
+  let base = `${sc.sql} AND e.work_date BETWEEN ? AND ?`;
+  if (projectId) { base += ' AND e.project_id=?'; P.push(projectId); }
+  const ids = peopleInScope(viewer, from, to, projectId), L = inList(ids);
   const totals = db.prepare(
     `SELECT ROUND(COALESCE(SUM(CASE WHEN p.is_leave=0 THEN e.days END),0),2) days, ROUND(COALESCE(SUM(CASE WHEN p.is_leave=1 THEN e.days END),0),2) leave_days,
             COUNT(*) entries, COUNT(DISTINCT e.user_id) people
@@ -68,11 +91,10 @@ export function overview(viewer, from, to) {
 
 /** Speed = hours per unit (days × hours/day ÷ quantity), only for lines where a quantity was entered. */
 export function productivity(viewer, from, to, { taskTypeId, projectId, userId } = {}) {
-  let ids = visibleUserIds(viewer);
-  if (userId) ids = ids.filter((i) => i === userId);
-  const L = inList(ids), H = hpd();
-  const filt = [`e.user_id IN (${L})`, 'e.work_date BETWEEN ? AND ?', 'e.quantity>0'];
-  const P = [...ids, from, to];
+  const sc = entryScope(viewer), H = hpd();
+  const filt = [sc.sql, 'e.work_date BETWEEN ? AND ?', 'e.quantity>0'];
+  const P = [...sc.params, from, to];
+  if (userId) { filt.push('e.user_id=?'); P.push(userId); }
   if (taskTypeId) { filt.push('e.task_type_id=?'); P.push(taskTypeId); }
   if (projectId) { filt.push('e.project_id=?'); P.push(projectId); }
   const where = filt.join(' AND ');

@@ -52,7 +52,11 @@ email), summaries by person / project / task item, a person × project table, an
 Optionally limit to some people or projects. Leaders only export their own team.
 
 ## Roles
-member (own data) · leader (own team's dashboard/growth/export; can *propose* projects) · admin (everything; approves projects).
+member (own data) · leader · admin (everything; approves projects).
+A **team leader** is assigned to projects by the admin (Projects → Edit → *Team leader(s)*). Their Dashboard, Speed
+and Export show everyone's work on those projects, with a selector per project. Career pages (goals, private notes,
+promotions) stay limited to the people who *report to* them (Team → Edit → *Reports to*). Leaders can *propose*
+new projects; approving one makes the proposer its leader by default.
 
 ## Planned: Odoo attendance
 The sheet counts days; attendance will be compared per person per day with Odoo clock-in hours and flagged
