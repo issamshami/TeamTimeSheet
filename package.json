@@ -4,10 +4,16 @@
   "description": "Smart team timesheet, productivity analytics and career growth tracker",
   "type": "module",
   "private": true,
-  "engines": { "node": ">=22.5" },
+  "engines": {
+    "node": ">=22.5"
+  },
   "scripts": {
     "start": "node --disable-warning=ExperimentalWarning server/index.js",
     "dev": "node --disable-warning=ExperimentalWarning --watch server/index.js",
     "seed:demo": "node --disable-warning=ExperimentalWarning scripts/seed-demo.js"
+  },
+  "dependencies": {
+    "nodemailer": "^10.3.1",
+    "read-excel-file": "^9.3.14"
   }
 }
