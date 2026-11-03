@@ -80,6 +80,21 @@ POST('/api/logout', ({ res, token }) => {
   return { ok: true };
 }, 'optional');
 GET('/api/me', ({ user }) => ({ user: publicUser(user) }));
+// "Settings" page: profile, assigned projects and working hours for the signed-in person
+GET('/api/me/summary', ({ user }) => {
+  const H = Number(getSettings().hours_per_day) || 8, t = today(), month = t.slice(0, 8) + '01', year = t.slice(0, 5) + '01-01';
+  const sum = (from) => db.prepare(`SELECT ROUND(COALESCE(SUM(CASE WHEN p.is_leave=0 THEN e.days END),0),2) work, ROUND(COALESCE(SUM(CASE WHEN p.is_leave=1 THEN e.days END),0),2) leave
+    FROM entries e JOIN projects p ON p.id=e.project_id WHERE e.user_id=? AND e.work_date BETWEEN ? AND ?`).get(user.id, from, t);
+  const all = sum('0000-01-01'), m = sum(month), y = sum(year);
+  const led = db.prepare(`SELECT p.id, p.name, s.name scope FROM project_leaders pl JOIN projects p ON p.id=pl.project_id LEFT JOIN scopes s ON s.id=p.default_scope_id
+    WHERE pl.user_id=? AND p.active=1 ORDER BY p.name`).all(user.id);
+  const worked = db.prepare(`SELECT p.id, p.name, s.name scope, ROUND(SUM(e.days),2) days, MAX(e.work_date) last FROM entries e JOIN projects p ON p.id=e.project_id LEFT JOIN scopes s ON s.id=p.default_scope_id
+    WHERE e.user_id=? AND p.is_leave=0 AND e.work_date>=? GROUP BY p.id ORDER BY days DESC`).all(user.id, addDays(t, -89));
+  const u = getUser(user.id), level = u.level_id ? db.prepare('SELECT name FROM levels WHERE id=?').get(u.level_id)?.name : null;
+  const leader = u.leader_id ? db.prepare('SELECT name FROM users WHERE id=?').get(u.leader_id)?.name : null;
+  return { user: publicUser(u), level, reports_to: leader, hours_per_day: H, led_projects: led, worked_projects: worked,
+    hours: { all_time: Math.round(all.work * H), this_month: Math.round(m.work * H), this_year: Math.round(y.work * H), days_all_time: all.work, leave_days_this_year: y.leave } };
+});
 POST('/api/me/password', ({ user, body }) => {
   const u = getUser(user.id);
   if (!verifyPassword(String(body.current ?? ''), u.pass_hash)) throw bad('Current password is wrong');

@@ -134,22 +134,33 @@ const NI = {
   gear: svg('<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>'),
   people: svg('<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><circle cx="17" cy="9" r="2.5"/><path d="M16 14.5a5 5 0 0 1 5.5 5"/>'),
 };
-// left · middle · right, as agreed: members & leaders vs admin
+// Dock (floating bar at the bottom): two icons · raised ＋ · two icons, then the time and date.
+NI.home = svg('<path d="M4 11.5 12 5l8 6.5V20a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1z"/><path d="M9 16h6"/>');
+NI.log = svg('<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h4"/><path d="M14 3v4a1 1 0 0 0 1 1h4v4"/><path d="M8.5 9h3M8.5 12.5h6M8.5 16h2.5"/><path d="m14 18 2 2 4-4"/>');
+NI.menu = svg('<path d="M4 7h16M4 12h16M4 17h16"/>');
+NI.clock = svg('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>');
+NI.cal = svg('<rect x="4" y="5" width="16" height="16" rx="2"/><path d="M8 3v4M16 3v4M4 10h16M8 14h.01M12 14h.01M16 14h.01M8 17.5h.01M12 17.5h.01"/>');
 const navFor = () => (isAdmin()
-  ? { left: [['setup', 'Setup', NI.gear, () => catalog.pending_proposals]], mid: [['teamlog', 'Log', NI.list], ['dash', 'Dashboard', NI.chart]], right: [['careers', 'Careers', NI.people]] }
-  : { left: [['history', 'My log', NI.list], ['dash', 'Dashboard', NI.chart]], mid: [['log', 'New Entry', NI.plus, null, true]], right: [['growth', 'My Career', NI.career]] });
-// sub-pages light up the tab they belong to
+  ? { left: [['dash', 'Home — dashboard', NI.home], ['teamlog', 'Team log', NI.log]], plus: null, right: [['careers', 'Careers', NI.people], ['setup', 'Setup', NI.menu, () => catalog.pending_proposals]] }
+  : { left: [['dash', 'Home — dashboard', NI.home], ['history', 'My log', NI.log]], plus: ['log', 'New entry'], right: [['growth', 'Career & goals', NI.people], ['me', 'Settings', NI.menu]] });
+// sub-pages light up the icon they belong to
 const NAV_PARENT = { prod: 'dash', export: 'dash', projects: 'dash', team: 'setup', lists: 'setup', emails: 'setup' };
+const clockText = () => { const d = new Date(); return [d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }), d.toLocaleDateString('en-GB')]; };
+setInterval(() => { const [t, d] = clockText(); document.querySelectorAll('.dock-time').forEach((x) => (x.textContent = t)); document.querySelectorAll('.dock-date').forEach((x) => (x.textContent = d)); }, 20000);
 function shell(active, body) {
   const on = isAdmin() && active === 'projects' ? 'setup' : NAV_PARENT[active] || active;
-  const link = ([k, label, icon, badge, big]) => { const n = badge?.(); return html`<a href="#${k}" class="${k === on ? 'on' : ''} ${big ? 'nav-new' : ''}" ${k === on ? raw('aria-current="page"') : ''}><span class="i">${raw(icon)}</span><span class="lbl">${label}${n ? html` <span class="badge">${n}</span>` : ''}</span></a>`; };
-  const nav = navFor();
+  const link = ([k, label, icon, badge]) => { const n = badge?.(); return html`<a href="#${k}" class="dock-btn ${k === on ? 'on' : ''}" title="${label}" aria-label="${label}" ${k === on ? raw('aria-current="page"') : ''}>${raw(icon)}${n ? html`<span class="badge">${n}</span>` : ''}</a>`; };
+  const nav = navFor(), [time, date] = clockText();
   mount($('#app'), html`${demoStrip()}<div class="topband"><header class="top"><div class="brand"><img src="${ICON}" alt=""> Team Timesheet</div>
-    <div class="row small" style="flex-wrap:nowrap"><span class="who hide-sm">${me.name}</span>${themeBtn()}<button class="btn sm icon-btn" data-act="pw" title="Change password" aria-label="Change password">${raw(ICONS.key)}<span class="hide-sm">Password</span></button><button class="btn sm icon-btn" data-act="logout" title="Sign out" aria-label="Sign out">${raw(ICONS.out)}<span class="hide-sm">Sign out</span></button></div></header></div>
-    <nav class="bar" aria-label="Main"><div class="nav-side nav-left">${nav.left.map(link)}</div><div class="nav-mid">${nav.mid.map(link)}</div><div class="nav-side nav-right">${nav.right.map(link)}</div></nav>
-    <main class="wrap" id="view">${body}</main>`);
+    <div class="row small" style="flex-wrap:nowrap"><span class="who hide-sm">${me.name}</span>${themeBtn()}${isAdmin() ? html`<button class="btn sm icon-btn" data-act="pw" title="Change password" aria-label="Change password">${raw(ICONS.key)}<span class="hide-sm">Password</span></button><button class="btn sm icon-btn" data-act="logout" title="Sign out" aria-label="Sign out">${raw(ICONS.out)}<span class="hide-sm">Sign out</span></button>` : ''}</div></header></div>
+    <main class="wrap" id="view">${body}</main>
+    <nav class="dock" aria-label="Main"><div class="pill ${nav.plus ? 'has-plus' : ''}">
+      <div class="pill-side">${nav.left.map(link)}</div>
+      ${nav.plus ? html`<a href="#${nav.plus[0]}" class="dock-plus ${on === nav.plus[0] ? 'on' : ''}" title="${nav.plus[1]}" aria-label="${nav.plus[1]}">${raw(NI.plus)}</a>` : ''}
+      <div class="pill-side">${nav.right.map(link)}</div></div>
+      <div class="dock-meta"><span>${raw(NI.clock)}<span class="dock-time">${time}</span></span><span>${raw(NI.cal)}<span class="dock-date">${date}</span></span></div></nav>`);
 }
-const home = () => (isAdmin() ? '#dash' : '#log');
+const home = () => '#dash';
 // admin Setup = Projects · Team & roles · Lists · Emails
 const setupTabs = (cur) => html`<div class="tabs" role="tablist">${[['setup', 'Projects'], ['team', 'Team & roles'], ['lists', 'Task items & lists'], ['emails', 'Emails & reminders']].map(([k, l]) => html`<a role="tab" href="#${k}" class="tab ${k === cur ? 'on' : ''}" ${k === cur ? raw('aria-selected="true"') : ''}>${l}${k === 'setup' && catalog.pending_proposals ? html` <span class="badge">${catalog.pending_proposals}</span>` : ''}</a>`)}</div>`;
 const withTabs = (cur) => { if (isAdmin()) $('#view').insertAdjacentHTML('afterbegin', setupTabs(cur).s); };
@@ -355,6 +366,31 @@ async function viewGrowth(id) {
       <div class="ladder">${g.levels.map((l) => html`<div class="step ${l.id === g.level?.id ? 'cur' : l.rank < curRank ? 'done' : ''}"><div>${l.rank < curRank ? '✓ ' : ''}${l.name}</div><div class="small">${l.description}</div></div>`)}</div>
       ${g.history.length ? html`<div class="small muted" style="margin-top:10px">${g.history.map((h) => `${h.from_date}: ${h.level}${h.note ? ' (' + h.note + ')' : ''}`).join('  ·  ')}</div>` : ''}
       <div class="small muted" style="margin-top:6px">${g.all_time.first_day ? `Logging since ${niceDate(g.all_time.first_day)} · ${fmtD(g.all_time.days)} working days in total` : ''}</div></div>`);
+}
+
+// ---------- SETTINGS (me) ----------
+async function viewMe() {
+  shell('me', html`<div class="empty">Loading…</div>`);
+  const m = await get('/me/summary'), u = m.user, th = getTheme();
+  const projs = m.led_projects.length ? m.led_projects : m.worked_projects;
+  mount($('#view'), html`<h1>Settings</h1>
+    <div class="card profile"><div class="avatar" aria-hidden="true">${u.name.split(' ').map((w) => w[0]).slice(0, 2).join('')}</div>
+      <div style="min-width:0"><h2 style="margin:0">${u.name}</h2><div class="muted">${u.job_title || (u.role === 'leader' ? 'Team leader' : 'Team member')}${m.level ? ' · ' + m.level : ''}</div></div></div>
+    <div class="card"><dl class="facts">
+      <div><dt>Email</dt><dd>${u.email || html`<span class="muted">Not set — ask the admin</span>`}</dd></div>
+      <div><dt>Job title</dt><dd>${u.job_title || '–'}</dd></div>
+      <div><dt>Access</dt><dd>${u.role === 'leader' ? 'Team leader' : u.role === 'admin' ? 'Admin' : 'Team member'}</dd></div>
+      ${m.reports_to ? html`<div><dt>Reports to</dt><dd>${m.reports_to}</dd></div>` : ''}
+      <div><dt>Team</dt><dd>${u.team || '–'}</dd></div><div><dt>Start date</dt><dd>${u.start_date ? niceDate(u.start_date) : '–'}</dd></div></dl></div>
+    <h2 class="sec">Total working hours <span class="muted small">${m.hours_per_day}h = 1 day</span></h2>
+    <div class="grid g4"><div class="kpi"><b>${m.hours.this_month.toLocaleString()}</b><span>hours this month</span></div><div class="kpi"><b>${m.hours.this_year.toLocaleString()}</b><span>hours this year</span></div>
+      <div class="kpi"><b>${m.hours.all_time.toLocaleString()}</b><span>hours in total (${fmtD(m.hours.days_all_time)} days)</span></div><div class="kpi"><b>${fmtD(m.hours.leave_days_this_year)}</b><span>days off this year</span></div></div>
+    <div class="card" style="margin-top:14px"><h2>${m.led_projects.length ? 'Projects assigned to you' : 'Your projects'}</h2>
+      <p class="small muted" style="margin-top:-4px">${m.led_projects.length ? 'You are team leader of these projects.' : 'Projects you logged time on in the last 90 days.'}</p>
+      ${projs.length ? html`<div class="items">${projs.map((p) => html`<div class="item row sp"><div><b>${p.name}</b> <span class="muted small">· ${p.scope || '–'}</span></div>${p.days != null ? html`<span class="small"><b>${Math.round(p.days * m.hours_per_day)}h</b> <span class="muted">· last ${shortDate(p.last)}</span></span>` : html`<a class="btn sm" href="#dash-${p.id}">Dashboard</a>`}</div>`)}</div>` : html`<div class="empty">No projects yet.</div>`}</div>
+    <div class="card"><h2>Preferences</h2>
+      <div class="field"><label class="f">Appearance</label><div class="chips" role="radiogroup" aria-label="Appearance">${[['auto', 'Same as device'], ['light', 'Light'], ['dark', 'Dark']].map(([k, l]) => html`<button class="chip ${th === k ? 'on' : ''}" role="radio" aria-checked="${th === k}" data-act="setTheme" data-t="${k}">${raw(THEMES[k][0])} ${l}</button>`)}</div></div>
+      <div class="row"><button class="btn" data-act="pw">${raw(ICONS.key)} Change password</button><button class="btn danger" data-act="logout">${raw(ICONS.out)} Sign out</button></div></div>`);
 }
 
 // ---------- CAREERS (admin) ----------
@@ -637,6 +673,7 @@ const fld = (n, l, o = {}) => ({ name: n, label: l, ...o });
 const actions = {
   ...logActions,
   theme: () => cycleTheme(),
+  setTheme: (el) => { try { localStorage.setItem(THEME_KEY, el.dataset.t); } catch {} applyTheme(el.dataset.t); route(); },
   demoLogin: async (el) => { $('#u').value = el.dataset.u; $('#p').value = el.dataset.p; $('#loginForm').requestSubmit(); },
   demoReset: async () => { if (await ask('Reset the preview data to its starting state? Your changes in this browser are discarded.', { ok: 'Reset', danger: true })) window.DEMO.reset(); },
   logout: async () => { await post('/logout'); me = null; renderLogin(); },
@@ -835,6 +872,7 @@ async function route() {
     else if (page === 'prod') await viewProd();
     else if (page === 'export') await viewExport();
     else if (page === 'careers') await viewCareers();
+    else if (page === 'me') await viewMe();
     else if (page === 'teamlog') await viewTeamLog();
     else if (page === 'team') { await viewTeam(); withTabs('team'); }
     else if (page === 'emails') { await viewEmails(); withTabs('emails'); }
