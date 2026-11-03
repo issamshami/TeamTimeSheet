@@ -101,6 +101,18 @@ CREATE TABLE IF NOT EXISTS notes (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 -- every email the app tries to send (also the audit trail when SMTP is not configured yet)
+-- goals / milestones a person records for themselves; visible to that person and the admin only
+CREATE TABLE IF NOT EXISTS career_updates (
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL CHECK (kind IN ('goal','milestone')),
+  title TEXT NOT NULL,
+  details TEXT NOT NULL DEFAULT '',
+  target_date TEXT,
+  status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','done')),
+  admin_note TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 CREATE TABLE IF NOT EXISTS outbox (
   id INTEGER PRIMARY KEY,
   kind TEXT NOT NULL, to_addr TEXT NOT NULL, subject TEXT NOT NULL, html TEXT NOT NULL,

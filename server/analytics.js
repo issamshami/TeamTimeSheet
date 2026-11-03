@@ -21,17 +21,20 @@ export const leaderProjectIds = (uid) => db.prepare('SELECT project_id FROM proj
  */
 export function entryScope(viewer, a = 'e') {
   if (viewer.role === 'admin') return { sql: '1=1', params: [] };
-  if (viewer.role === 'leader') { const p = leaderProjectIds(viewer.id); return { sql: `${a}.project_id IN (${inList(p)})`, params: p }; }
+  // leader: their own lines + every line on the projects they lead
+  if (viewer.role === 'leader') { const p = leaderProjectIds(viewer.id); return { sql: `(${a}.project_id IN (${inList(p)}) OR ${a}.user_id=?)`, params: [...p, viewer.id] }; }
   return { sql: `${a}.user_id=?`, params: [viewer.id] };
 }
 /** People a viewer follows up on: admin → everyone; leader → direct reports + anyone who logged on their projects in the period. */
 export function peopleInScope(viewer, from, to, projectId) {
   if (viewer.role === 'admin' && !projectId) return visibleUserIds(viewer);
+  if (viewer.role === 'member') return [viewer.id];
   const sc = entryScope(viewer), P = [...sc.params, from, to];
   let q = `SELECT DISTINCT e.user_id id FROM entries e WHERE ${sc.sql} AND e.work_date BETWEEN ? AND ?`;
   if (projectId) { q += ' AND e.project_id=?'; P.push(projectId); }
   const ids = new Set(db.prepare(q).all(...P).map((r) => r.id));
   if (viewer.role === 'leader' && !projectId) visibleUserIds(viewer).forEach((i) => ids.add(i));
+  if (viewer.role === 'leader') ids.add(viewer.id);
   return [...ids];
 }
 
@@ -139,4 +142,37 @@ export function goalProgress(g, live) {
   const start = g.start_value ?? (g.metric === 'units_month' ? 0 : live);
   if (start === g.target_value) return live === g.target_value ? 100 : 0;
   return Math.max(0, Math.min(100, Math.round(((live - start) / (g.target_value - start)) * 100)));
+}
+
+/**
+ * One person's work profile over [from,to]: what they spend time on, how long a task line takes them vs the team,
+ * speed per unit where quantities were entered, and how complete their timesheet is.
+ */
+export function careerStats(uid, from, to) {
+  const H = hpd();
+  const per_task = db.prepare(`SELECT t.id task_type_id, t.name task_type, t.unit_label unit, COUNT(*) lines, ROUND(SUM(e.days),2) days,
+      ROUND(AVG(e.days),3) avg_days, SUM(e.quantity) units, ROUND(SUM(CASE WHEN e.quantity>0 THEN e.days END)*${H}/NULLIF(SUM(CASE WHEN e.quantity>0 THEN e.quantity END),0),2) hrs_per_unit
+    FROM entries e JOIN task_types t ON t.id=e.task_type_id WHERE e.user_id=? AND e.work_date BETWEEN ? AND ? AND t.is_leave=0
+    GROUP BY t.id ORDER BY days DESC`).all(uid, from, to);
+  const team = Object.fromEntries(db.prepare(`SELECT e.task_type_id id, ROUND(AVG(e.days),3) avg_days,
+      ROUND(SUM(CASE WHEN e.quantity>0 THEN e.days END)*${H}/NULLIF(SUM(CASE WHEN e.quantity>0 THEN e.quantity END),0),2) hrs_per_unit
+    FROM entries e WHERE e.work_date BETWEEN ? AND ? GROUP BY e.task_type_id`).all(from, to).map((r) => [r.id, r]));
+  const total = per_task.reduce((s, r) => s + r.days, 0) || 1;
+  for (const r of per_task) {
+    r.share = Math.round((r.days / total) * 100);
+    r.avg_hours = round(r.avg_days * H, 1);
+    r.team_avg_hours = team[r.task_type_id] ? round(team[r.task_type_id].avg_days * H, 1) : null;
+    r.team_hrs_per_unit = team[r.task_type_id]?.hrs_per_unit ?? null;
+  }
+  const top_projects = db.prepare(`SELECT p.id, p.name, ROUND(SUM(e.days),2) days FROM entries e JOIN projects p ON p.id=e.project_id
+    WHERE e.user_id=? AND e.work_date BETWEEN ? AND ? AND p.is_leave=0 GROUP BY p.id ORDER BY days DESC LIMIT 6`).all(uid, from, to);
+  const settings = getSettings();
+  const localToday = new Intl.DateTimeFormat('en-CA', { timeZone: settings.timezone }).format(new Date());
+  const compTo = to >= localToday ? addDays(localToday, -1) : to;
+  const c = from <= compTo ? compliance([uid], from, compTo, settings)[0] : null;
+  const totals = db.prepare(`SELECT ROUND(COALESCE(SUM(CASE WHEN p.is_leave=0 THEN e.days END),0),2) days, ROUND(COALESCE(SUM(CASE WHEN p.is_leave=1 THEN e.days END),0),2) leave_days,
+      COALESCE(SUM(e.quantity),0) units, COUNT(DISTINCT CASE WHEN p.is_leave=0 THEN e.project_id END) projects
+    FROM entries e JOIN projects p ON p.id=e.project_id WHERE e.user_id=? AND e.work_date BETWEEN ? AND ?`).get(uid, from, to);
+  return { from, to, per_task, top_projects, totals,
+    completeness: c && c.expected ? { expected: c.expected, complete: c.complete, missing: c.missing.length, partial: c.partial.length, pct: Math.round((c.complete / c.expected) * 100) } : null };
 }

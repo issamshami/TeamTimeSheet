@@ -2,7 +2,7 @@
 import { randomBytes } from 'node:crypto';
 import { db, hashPassword, verifyPassword, seedIfEmpty, getSettings, setSettings, SETTING_DEFAULTS } from './db.js';
 import { suggest } from './suggest.js';
-import { overview, productivity, visibleUserIds, goalLiveValue, goalProgress, addDays, iso, peopleInScope, leaderProjectIds, entryScope } from './analytics.js';
+import { overview, productivity, visibleUserIds, goalLiveValue, goalProgress, addDays, iso, peopleInScope, leaderProjectIds, entryScope, careerStats } from './analytics.js';
 import { sendReminders, sendWeeklyReport, sendTest, localNow, reminderRecipients, weeklyReportData } from './notifications.js';
 import { smtpConfigured, sendMail } from './mailer.js';
 import { buildExport, LINE_COLUMNS, SHEETS } from './exporter.js';
@@ -51,7 +51,8 @@ const publicUser = (u) => ({
 const requireRole = (u, ...roles) => { if (!roles.includes(u.role)) throw forbidden(); };
 const canViewUser = (viewer, targetId) => { if (!visibleUserIds(viewer).includes(targetId)) throw forbidden(); };
 const getUser = (id) => { const u = db.prepare('SELECT * FROM users WHERE id=?').get(id); if (!u) throw notFound('User not found'); return u; };
-const canManage = (viewer, target) => viewer.role === 'admin' || (viewer.role === 'leader' && target.leader_id === viewer.id);
+// career data (goals, feedback, levels) is managed by the admin only
+const canManage = (viewer) => viewer.role === 'admin';
 const uniq = (fn) => { try { return fn(); } catch (e) { if (/UNIQUE/.test(e.message)) throw bad('That name already exists'); throw e; } };
 const today = () => localNow(getSettings().timezone).date;
 
@@ -217,6 +218,14 @@ const ENTRY_SELECT = `SELECT e.*, p.name project, p.is_leave, t.name task_type, 
   LEFT JOIN scopes s ON s.id=e.scope_id`;
 GET('/api/entries', ({ user, query }) => {
   const { from, to } = range({ from: query.from || query.date, to: query.to || query.date });
+  if (query.all === '1') {
+    // admin: the whole team's log, optionally for one person / project
+    requireRole(user, 'admin');
+    const W = ['e.work_date BETWEEN ? AND ?'], P = [from, to];
+    if (query.user_id) { W.push('e.user_id=?'); P.push(Number(query.user_id)); }
+    if (query.project_id) { W.push('e.project_id=?'); P.push(Number(query.project_id)); }
+    return { entries: db.prepare(`${ENTRY_SELECT} WHERE ${W.join(' AND ')} ORDER BY e.work_date DESC, u.name, e.task_seq LIMIT 3000`).all(...P) };
+  }
   const uid = query.user_id ? Number(query.user_id) : user.id;
   canViewUser(user, uid);
   return { entries: db.prepare(`${ENTRY_SELECT} WHERE e.user_id=? AND e.work_date BETWEEN ? AND ? ORDER BY e.work_date DESC, e.task_seq, e.id`).all(uid, from, to) };
@@ -317,11 +326,11 @@ PUT('/api/users/:id', ({ user, body, params }) => {
 
 // ---------- dashboard ----------
 GET('/api/dash/overview', ({ user, query }) => {
-  requireRole(user, 'admin', 'leader'); const { from, to } = range(query);
+  const { from, to } = range(query);
   return { from, to, ...overview(user, from, to, { projectId: query.project_id ? Number(query.project_id) : null }) };
 });
 GET('/api/dash/people', ({ user, query }) => {
-  requireRole(user, 'admin', 'leader'); const { from, to } = range(query);
+  const { from, to } = range(query);
   const ids = peopleInScope(user, from, to);
   return { people: ids.length ? db.prepare(`SELECT id,name FROM users WHERE id IN (${ids.map(() => '?').join(',')}) AND role<>'admin' ORDER BY name`).all(...ids) : [] };
 });
@@ -370,10 +379,9 @@ POST('/api/admin/notify', async ({ user, body }) => {
 });
 GET('/api/admin/outbox/:id', ({ user, params }) => { requireRole(user, 'admin'); const r = db.prepare('SELECT * FROM outbox WHERE id=?').get(params.id); if (!r) throw notFound(); return r; });
 // ---------- export ----------
-GET('/api/export/options', ({ user }) => { requireRole(user, 'admin', 'leader');
+GET('/api/export/options', () => {
   return { columns: LINE_COLUMNS.map(({ key, label, def }) => ({ key, label, def })), sheets: SHEETS }; });
 GET('/api/export', async ({ user, query }) => {
-  requireRole(user, 'admin', 'leader');
   const from = dateParam(query.from || '', 'from'), to = dateParam(query.to || '', 'to');
   if (from > to) throw bad('"From" must be before "To"');
   if ((Date.parse(to) - Date.parse(from)) / 86400000 > 3 * 366) throw bad('Please export at most 3 years at a time');
@@ -388,26 +396,65 @@ GET('/api/export', async ({ user, query }) => {
 
 // ---------- career / growth ----------
 function growth(viewer, uid) {
-  canViewUser(viewer, uid);
+  if (viewer.role !== 'admin' && viewer.id !== uid) throw forbidden('Only you and the admin can see this career page');
   const u = getUser(uid);
-  const manager = canManage(viewer, u);
+  const manager = canManage(viewer);
   const level = u.level_id ? db.prepare('SELECT * FROM levels WHERE id=?').get(u.level_id) : null;
   const levels = db.prepare('SELECT * FROM levels ORDER BY rank').all();
   const history = db.prepare('SELECT h.*, l.name level FROM level_history h JOIN levels l ON l.id=h.level_id WHERE h.user_id=? ORDER BY h.from_date DESC, h.id DESC').all(uid);
   const goals = db.prepare('SELECT g.*, t.name task_type FROM goals g LEFT JOIN task_types t ON t.id=g.task_type_id WHERE g.user_id=? ORDER BY (g.status=\'active\') DESC, g.due_date').all(uid)
     .map((g) => { const live = goalLiveValue(g); return { ...g, live_value: live, progress: goalProgress(g, live) }; });
   const notes = db.prepare(`SELECT n.*, a.name author FROM notes n JOIN users a ON a.id=n.author_id WHERE n.user_id=? ${manager ? '' : 'AND n.shared=1'} ORDER BY n.created_at DESC, n.id DESC`).all(uid);
-  const to = today(), p1 = [uid, addDays(to, -29), to], p0 = [uid, addDays(to, -59), addDays(to, -30)];
-  const effort = (p) => db.prepare(`SELECT t.id task_type_id, t.name task_type, ROUND(SUM(e.days),2) days FROM entries e JOIN task_types t ON t.id=e.task_type_id
-    WHERE e.user_id=? AND e.work_date BETWEEN ? AND ? AND t.is_leave=0 GROUP BY t.id ORDER BY days DESC`).all(...p);
-  const prev = Object.fromEntries(effort(p0).map((r) => [r.task_type_id, r.days]));
-  const speed = Object.fromEntries(productivity({ role: 'admin' }, p1[1], to, { userId: uid }).by_person_task.map((r) => [r.task_type_id, r]));
-  const skills = effort(p1).map((r) => ({ ...r, prev_days: prev[r.task_type_id] ?? null, units: speed[r.task_type_id]?.units ?? null, unit: speed[r.task_type_id]?.unit ?? null,
-    hrs_per_unit: speed[r.task_type_id]?.hrs_per_unit ?? null, team_hrs_per_unit: speed[r.task_type_id]?.team_hrs_per_unit ?? null }));
-  const totals = db.prepare(`SELECT COALESCE(ROUND(SUM(CASE WHEN p.is_leave=0 THEN e.days END),1),0) days, COALESCE(SUM(e.quantity),0) units, COUNT(DISTINCT e.work_date) active_days
+  const updates = db.prepare("SELECT * FROM career_updates WHERE user_id=? ORDER BY (status='open') DESC, COALESCE(target_date,'9999') , id DESC").all(uid);
+  const to = today();
+  const stats = careerStats(uid, addDays(to, -179), to);
+  const all_time = db.prepare(`SELECT COALESCE(ROUND(SUM(CASE WHEN p.is_leave=0 THEN e.days END),1),0) days, COUNT(DISTINCT e.work_date) active_days, MIN(e.work_date) first_day
     FROM entries e JOIN projects p ON p.id=e.project_id WHERE e.user_id=?`).get(uid);
-  return { user: publicUser(u), level, levels, history, goals, notes, skills, totals, can_manage: manager };
+  return { user: publicUser(u), level, levels, history, goals, notes, updates, stats, all_time, can_manage: manager, is_self: viewer.id === uid };
 }
+// admin: everyone's career at a glance
+GET('/api/careers', ({ user }) => {
+  requireRole(user, 'admin');
+  const to = today(), from = addDays(to, -89);
+  const people = db.prepare("SELECT u.*, l.name level FROM users u LEFT JOIN levels l ON l.id=u.level_id WHERE u.role<>'admin' ORDER BY u.active DESC, u.name").all();
+  return { people: people.map((u) => {
+    const st = careerStats(u.id, from, to);
+    const upd = db.prepare("SELECT COUNT(*) n, MAX(created_at) last FROM career_updates WHERE user_id=? AND status='open'").get(u.id);
+    return { ...publicUser(u), level: u.level, completeness: st.completeness?.pct ?? null, days: st.totals.days,
+      top_task: st.per_task[0]?.task_type || null, top_project: st.top_projects[0]?.name || null, open_updates: upd.n, last_update: upd.last };
+  }) };
+});
+// a person records their own goal / milestone (visible to them + the admin)
+const careerFields = (b) => ({
+  kind: b.kind === 'milestone' ? 'milestone' : 'goal', title: str(b.title, 'title', { required: true, max: 200 }),
+  details: str(b.details, 'details', { max: 2000 }), target_date: b.target_date ? dateParam(String(b.target_date), 'date') : null,
+});
+POST('/api/me/career', async ({ user, body }) => {
+  const f = careerFields(body);
+  const id = Number(db.prepare('INSERT INTO career_updates (user_id,kind,title,details,target_date) VALUES (?,?,?,?,?)').run(user.id, f.kind, f.title, f.details, f.target_date).lastInsertRowid);
+  const s = getSettings(), to = s.admin_email || db.prepare("SELECT email FROM users WHERE role='admin' AND email<>'' LIMIT 1").get()?.email || '';
+  if (user.role !== 'admin') await sendMail({ kind: 'career', to, subject: `New ${f.kind} from ${user.name}: ${f.title}`,
+    html: mailBox(`New ${f.kind} from ${user.name}`, `<p style="font-size:17px"><b>${escH(f.title)}</b>${f.target_date ? ` — by ${escH(f.target_date)}` : ''}</p>${f.details ? `<p>${escH(f.details)}</p>` : ''}<p>See it on their career page under <b>Careers</b>.</p>`) });
+  return { id };
+});
+const careerItem = (user, id) => {
+  const c = db.prepare('SELECT * FROM career_updates WHERE id=?').get(id);
+  if (!c) throw notFound();
+  if (user.role !== 'admin' && c.user_id !== user.id) throw forbidden();
+  return c;
+};
+PUT('/api/career/:id', ({ user, params, body }) => {
+  const c = careerItem(user, params.id);
+  const status = body.status === 'done' ? 'done' : body.status === 'open' ? 'open' : c.status;
+  if (user.role === 'admin' && c.user_id !== user.id) {
+    db.prepare('UPDATE career_updates SET status=?, admin_note=? WHERE id=?').run(status, str(body.admin_note ?? c.admin_note, 'note', { max: 2000 }), c.id);
+  } else {
+    const f = careerFields({ ...c, ...body });
+    db.prepare('UPDATE career_updates SET kind=?, title=?, details=?, target_date=?, status=? WHERE id=?').run(f.kind, f.title, f.details, f.target_date, status, c.id);
+  }
+  return { ok: true };
+});
+DEL('/api/career/:id', ({ user, params }) => { const c = careerItem(user, params.id); db.prepare('DELETE FROM career_updates WHERE id=?').run(c.id); return { ok: true }; });
 GET('/api/users/:id/growth', ({ user, params }) => growth(user, Number(params.id)));
 
 function requireManager(viewer, uid) { const t = getUser(uid); if (!canManage(viewer, t)) throw forbidden(); return t; }

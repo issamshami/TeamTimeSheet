@@ -126,16 +126,33 @@ const byId = (arr, id) => arr.find((x) => x.id === Number(id));
 const scopedProjects = () => catalog.projects.filter((p) => !p.is_leave && (!catalog.my_project_ids || catalog.my_project_ids.includes(p.id)));
 
 // ---------- shell ----------
-const NAV = [
-  ['log', '＋', 'Log time', () => true], ['history', '☰', 'My entries', () => true], ['growth', '↗', 'My growth', () => true],
-  ['dash', '▦', 'Dashboard', isMgr], ['prod', '⏱', 'Speed', isMgr], ['team', '☻', 'Team', isMgr], ['projects', '◧', () => (isAdmin() && catalog.pending_proposals ? `Projects (${catalog.pending_proposals})` : 'Projects'), isMgr], ['export', '⤓', 'Export', isMgr], ['emails', '✉', 'Emails', isAdmin], ['setup', '⚙', 'Setup', isAdmin],
-];
+const NI = {
+  list: svg('<path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"/>'),
+  chart: svg('<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>'),
+  plus: svg('<path d="M12 5v14M5 12h14"/>'),
+  career: svg('<path d="M3 17l6-6 4 4 8-8"/><path d="M15 7h6v6"/>'),
+  gear: svg('<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>'),
+  people: svg('<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><circle cx="17" cy="9" r="2.5"/><path d="M16 14.5a5 5 0 0 1 5.5 5"/>'),
+};
+// left · middle · right, as agreed: members & leaders vs admin
+const navFor = () => (isAdmin()
+  ? { left: [['setup', 'Setup', NI.gear, () => catalog.pending_proposals]], mid: [['teamlog', 'Log', NI.list], ['dash', 'Dashboard', NI.chart]], right: [['careers', 'Careers', NI.people]] }
+  : { left: [['history', 'My log', NI.list], ['dash', 'Dashboard', NI.chart]], mid: [['log', 'New Entry', NI.plus, null, true]], right: [['growth', 'My Career', NI.career]] });
+// sub-pages light up the tab they belong to
+const NAV_PARENT = { prod: 'dash', export: 'dash', projects: 'dash', team: 'setup', lists: 'setup', emails: 'setup' };
 function shell(active, body) {
+  const on = isAdmin() && active === 'projects' ? 'setup' : NAV_PARENT[active] || active;
+  const link = ([k, label, icon, badge, big]) => { const n = badge?.(); return html`<a href="#${k}" class="${k === on ? 'on' : ''} ${big ? 'nav-new' : ''}" ${k === on ? raw('aria-current="page"') : ''}><span class="i">${raw(icon)}</span><span class="lbl">${label}${n ? html` <span class="badge">${n}</span>` : ''}</span></a>`; };
+  const nav = navFor();
   mount($('#app'), html`${demoStrip()}<div class="topband"><header class="top"><div class="brand"><img src="${ICON}" alt=""> Team Timesheet</div>
     <div class="row small" style="flex-wrap:nowrap"><span class="who hide-sm">${me.name}</span>${themeBtn()}<button class="btn sm icon-btn" data-act="pw" title="Change password" aria-label="Change password">${raw(ICONS.key)}<span class="hide-sm">Password</span></button><button class="btn sm icon-btn" data-act="logout" title="Sign out" aria-label="Sign out">${raw(ICONS.out)}<span class="hide-sm">Sign out</span></button></div></header></div>
-    <nav class="bar">${NAV.filter((n) => n[3]()).map(([k, i, l]) => html`<a href="#${k}" class="${k === active ? 'on' : ''}"><span class="i">${i}</span>${typeof l === 'function' ? l() : l}</a>`)}</nav>
+    <nav class="bar" aria-label="Main"><div class="nav-side nav-left">${nav.left.map(link)}</div><div class="nav-mid">${nav.mid.map(link)}</div><div class="nav-side nav-right">${nav.right.map(link)}</div></nav>
     <main class="wrap" id="view">${body}</main>`);
 }
+const home = () => (isAdmin() ? '#dash' : '#log');
+// admin Setup = Projects · Team & roles · Lists · Emails
+const setupTabs = (cur) => html`<div class="tabs" role="tablist">${[['setup', 'Projects'], ['team', 'Team & roles'], ['lists', 'Task items & lists'], ['emails', 'Emails & reminders']].map(([k, l]) => html`<a role="tab" href="#${k}" class="tab ${k === cur ? 'on' : ''}" ${k === cur ? raw('aria-selected="true"') : ''}>${l}${k === 'setup' && catalog.pending_proposals ? html` <span class="badge">${catalog.pending_proposals}</span>` : ''}</a>`)}</div>`;
+const withTabs = (cur) => { if (isAdmin()) $('#view').insertAdjacentHTML('afterbegin', setupTabs(cur).s); };
 
 // ---------- login ----------
 function renderLogin() {
@@ -280,48 +297,100 @@ async function viewHistory() {
   const days = {};
   entries.forEach((e) => (days[e.work_date] ||= []).push(e));
   const work = entries.filter((e) => !e.is_leave).reduce((s, e) => s + e.days, 0);
-  mount($('#view'), html`<h1>My entries</h1><div class="card"><div class="row sp"><span class="muted">Last 30 days</span><b>${fmtD(work)} working days · ${Object.keys(days).length} days with entries</b></div></div>
+  mount($('#view'), html`<h1>My log</h1><div class="card"><div class="row sp"><span class="muted">Last 30 days</span><b>${fmtD(work)} working days · ${Object.keys(days).length} days with entries</b></div></div>
     ${Object.keys(days).length ? Object.keys(days).sort().reverse().map((d) => { const t = +days[d].reduce((s, e) => s + e.days, 0).toFixed(2);
       return html`<div class="card"><div class="day-h" style="margin-top:0"><span>${niceDate(d)}</span><span><span class="tag ${t >= 0.99 ? 'good' : 'warn'}">${fmtD(t)} / 1</span></span></div>
       ${days[d].map((e) => html`<div class="entry"><div class="t"><span class="tag">Task ${e.task_seq}</span> ${e.project} · ${e.task_type}${e.scope && e.scope !== 'None' ? html` <span class="muted small">(${e.scope})</span>` : ''}</div><div class="right"><b>${fmtD(e.days)}</b></div><div class="d">${e.description}</div><div class="right"><a class="btn sm" href="#log" data-act="goEdit" data-date="${d}" data-id="${e.id}">Edit</a></div></div>`)}</div>`; })
-      : html`<div class="card empty">No entries yet — head to “Log time”.</div>`}`);
+      : html`<div class="card empty">No entries yet. Tap <b>New Entry</b> to log your first day.</div>`}`);
 }
 
-// ---------- GROWTH ----------
+// ---------- CAREER ----------
 async function viewGrowth(id) {
-  shell('growth', html`<div class="empty">Loading…</div>`);
   const uid = Number(id) || me.id;
+  shell(uid === me.id ? 'growth' : 'careers', html`<div class="empty">Loading…</div>`);
   const g = await get(`/users/${uid}/growth`);
+  window._growth = g;
+  const st = g.stats, self = g.is_self, admin = g.can_manage, first = g.user.name.split(' ')[0];
   const curRank = g.level ? g.levels.find((l) => l.id === g.level.id)?.rank : 0;
-  const mgr = g.can_manage, admin = isAdmin();
+  const c = st.completeness;
   const goalCard = (x) => {
     const live = x.metric === 'manual' ? x.current_value : x.live_value, pct = x.progress;
-    return html`<div class="card" style="margin-bottom:10px;box-shadow:none"><div class="row sp"><b>${x.title}</b><span class="tag ${x.status === 'achieved' ? 'good' : x.status === 'dropped' ? 'bad' : ''}">${x.status}</span></div>
-      <div class="small muted">${x.metric === 'avg_hrs' ? `Avg hours per unit${x.task_type ? ' — ' + x.task_type : ''} (30d, lower is better)` : x.metric === 'units_month' ? `Units per 30 days${x.task_type ? ' — ' + x.task_type : ''}` : 'Manual'}${x.due_date ? ' · due ' + x.due_date : ''}</div>
+    return html`<div class="item"><div class="row sp"><b>${x.title}</b><span class="tag ${x.status === 'achieved' ? 'good' : x.status === 'dropped' ? 'bad' : ''}">${x.status}</span></div>
+      <div class="small muted">${x.metric === 'avg_hrs' ? `Hours per unit${x.task_type ? ' — ' + x.task_type : ''} (lower is better)` : x.metric === 'units_month' ? `Units per 30 days${x.task_type ? ' — ' + x.task_type : ''}` : 'Progress'}${x.due_date ? ' · due ' + x.due_date : ''}</div>
       <div class="progress ${pct >= 100 ? 'over' : ''}" style="margin:8px 0"><i style="width:${pct}%"></i></div>
       <div class="row sp small"><span>${x.start_value ?? '–'} → <b>${live ?? '–'}</b> → target ${x.target_value ?? '–'} ${x.unit}</span><span>${pct}%</span></div>
-      ${x.description ? html`<div class="small" style="margin-top:6px">${x.description}</div>` : ''}
-      <div class="row" style="margin-top:8px">
-        ${x.metric === 'manual' && (mgr || g.user.id === me.id) ? html`<button class="btn sm" data-act="goalProgress" data-id="${x.id}" data-cur="${x.current_value ?? ''}">Update progress</button>` : ''}
-        ${mgr ? html`<button class="btn sm" data-act="goalEdit" data-uid="${uid}" data-id="${x.id}">Edit</button><button class="btn sm danger" data-act="goalDel" data-id="${x.id}">Delete</button>` : ''}</div></div>`;
+      <div class="row" style="margin-top:8px">${x.metric === 'manual' && (admin || self) ? html`<button class="btn sm" data-act="goalProgress" data-id="${x.id}" data-cur="${x.current_value ?? ''}">Update progress</button>` : ''}
+        ${admin ? html`<button class="btn sm" data-act="goalEdit" data-uid="${uid}" data-id="${x.id}">Edit</button><button class="btn sm danger" data-act="goalDel" data-id="${x.id}">Delete</button>` : ''}</div></div>`;
   };
-  window._growth = g;
+  const upd = (u) => html`<div class="item ${u.status === 'done' ? 'done' : ''}"><div class="row sp"><div><span class="tag ${u.kind === 'goal' ? '' : 'good'}">${u.kind}</span> <b>${u.title}</b></div><span class="tag ${u.status === 'done' ? 'good' : 'warn'}">${u.status === 'done' ? 'done' : 'open'}</span></div>
+    <div class="small muted" style="margin-top:4px">${u.target_date ? `Target ${niceDate(u.target_date)} · ` : ''}added ${u.created_at.slice(0, 10)}</div>
+    ${u.details ? html`<div class="small" style="margin-top:6px">${u.details}</div>` : ''}${u.admin_note ? html`<div class="note small" style="margin:8px 0 0"><b>Admin:</b> ${u.admin_note}</div>` : ''}
+    <div class="row" style="margin-top:8px"><button class="btn sm" data-act="careerToggle" data-id="${u.id}" data-status="${u.status === 'done' ? 'open' : 'done'}">${u.status === 'done' ? 'Reopen' : 'Mark done'}</button>
+      ${admin && !self ? html`<button class="btn sm" data-act="careerNote" data-id="${u.id}">${u.admin_note ? 'Edit note' : 'Add note'}</button>` : ''}
+      ${self ? html`<button class="btn sm" data-act="careerEdit" data-id="${u.id}">Edit</button>` : ''}<button class="btn sm danger" data-act="careerDel" data-id="${u.id}">Delete</button></div></div>`;
+  const vsTeam = (mine, team) => { if (mine == null || !team) return ''; const d = Math.round(((mine - team) / team) * 100); return Math.abs(d) < 5 ? html`<span class="tag">on par</span>` : d < 0 ? html`<span class="tag good">${-d}% faster</span>` : html`<span class="tag warn">${d}% slower</span>`; };
   mount($('#view'), html`
-    <div class="row sp"><div><h1 style="margin-bottom:2px">${g.user.name}</h1><div class="muted">${g.user.job_title || ''}${g.level ? ' · ' + g.level.name : ''}</div></div>
-      ${uid !== me.id ? html`<a class="btn sm" href="#team">← Team</a>` : ''}</div>
-    <div class="grid g4" style="margin:14px 0"><div class="kpi"><b>${fmtD(g.totals.days)}</b><span>working days logged</span></div><div class="kpi"><b>${g.totals.units}</b><span>units counted (drawings etc.)</span></div><div class="kpi"><b>${g.totals.active_days}</b><span>days with entries</span></div></div>
-    <div class="card"><div class="row sp"><h2>Career path</h2>${admin ? html`<button class="btn sm" data-act="setLevel" data-uid="${uid}">Change level</button>` : ''}</div>
+    <div class="row sp"><div><h1 style="margin-bottom:2px">${self ? 'My Career' : g.user.name}</h1><div class="muted">${self ? g.user.name + ' · ' : ''}${g.user.job_title || ''}${g.level ? ' · ' + g.level.name : ''}</div></div>
+      ${!self ? html`<a class="btn sm" href="#careers">← Careers</a>` : ''}</div>
+    <h2 class="sec">Performance <span class="muted small">last 6 months</span></h2>
+    <div class="grid g4"><div class="kpi"><b>${fmtD(st.totals.days)}</b><span>working days logged</span></div>
+      <div class="kpi"><b>${c ? c.pct + '%' : '–'}</b><span>timesheet complete${c ? ` (${c.complete}/${c.expected} days)` : ''}</span></div>
+      <div class="kpi"><b>${st.totals.projects}</b><span>projects worked on</span></div><div class="kpi"><b>${st.totals.units || '–'}</b><span>drawings / items counted</span></div></div>
+    <div class="grid g2" style="margin-top:14px">
+      <div class="card"><h2>${self ? 'What I work on most' : `What ${first} works on most`}</h2>${st.per_task.length ? bars(st.per_task.slice(0, 8), { label: (r) => r.task_type, value: (r) => r.days, text: (r) => `${r.share}%` }) : html`<div class="empty">No entries yet.</div>`}</div>
+      <div class="card"><h2>Main projects</h2>${st.top_projects.length ? bars(st.top_projects, { label: (r) => r.name, value: (r) => r.days, text: (r) => `${fmtD(r.days)}d` }) : html`<div class="empty">No entries yet.</div>`}</div></div>
+    <div class="card"><h2>Average time per task</h2><p class="small muted" style="margin-top:-4px">Time on one task line, compared with the team average for the same task item.${st.per_task.some((r) => r.hrs_per_unit) ? ' “Per unit” uses lines where a count (sheets, drawings) was entered.' : ''}</p>
+      ${st.per_task.length ? html`<div class="tscroll"><table><tr><th>Task item</th><th class="right">Times</th><th class="right">Avg time</th><th class="right">Team avg</th><th></th>${st.per_task.some((r) => r.hrs_per_unit) ? html`<th class="right">Per unit</th>` : ''}</tr>
+        ${st.per_task.map((r) => html`<tr><td>${r.task_type}</td><td class="right">${r.lines}</td><td class="right"><b>${fmtH(r.avg_hours)}</b></td><td class="right muted">${r.team_avg_hours == null ? '–' : fmtH(r.team_avg_hours)}</td><td>${vsTeam(r.avg_hours, r.team_avg_hours)}</td>
+          ${st.per_task.some((x) => x.hrs_per_unit) ? html`<td class="right">${r.hrs_per_unit ? html`${fmtH(r.hrs_per_unit)}/${r.unit} <span class="muted small">(team ${fmtH(r.team_hrs_per_unit)})</span>` : '–'}</td>` : ''}</tr>`)}</table></div>` : html`<div class="empty">No entries yet.</div>`}</div>
+    <div class="card"><div class="row sp"><h2>${self ? 'My goals & milestones' : 'Goals & milestones they added'}</h2>${self ? html`<button class="btn sm primary" data-act="careerAdd">+ Add goal or milestone</button>` : ''}</div>
+      <p class="small muted" style="margin-top:-4px">${self ? 'Only you and the admin can see these.' : `Added by ${first}. Visible to ${first} and you only.`}</p>
+      ${g.updates.length ? html`<div class="items">${g.updates.map(upd)}</div>` : html`<div class="empty">${self ? 'Add a goal you are working towards, or a milestone you reached.' : 'Nothing added yet.'}</div>`}</div>
+    ${g.goals.length || admin ? html`<div class="card"><div class="row sp"><h2>Targets ${self ? 'set with the admin' : ''}</h2>${admin && !self ? html`<button class="btn sm primary" data-act="goalAdd" data-uid="${uid}">+ Target</button>` : ''}</div>
+      ${g.goals.length ? html`<div class="items">${g.goals.map(goalCard)}</div>` : html`<div class="empty">No targets yet.</div>`}</div>` : ''}
+    ${g.notes.length || (admin && !self) ? html`<div class="card"><div class="row sp"><h2>Feedback</h2>${admin && !self ? html`<button class="btn sm primary" data-act="noteAdd" data-uid="${uid}">+ Add</button>` : ''}</div>
+      ${g.notes.length ? g.notes.map((n) => html`<div class="note ${n.shared ? '' : 'priv'}"><div class="small muted">${n.created_at.slice(0, 10)} · ${n.author} · <span class="tag">${n.kind}</span> ${admin ? (n.shared ? html`<span class="tag good">shared</span>` : html`<span class="tag warn">private</span>`) : ''}
+        ${admin ? html` <a href="#" data-act="noteDel" data-id="${n.id}" class="small">delete</a>` : ''}</div><div>${n.body}</div></div>`) : html`<div class="empty">Nothing yet.</div>`}</div>` : ''}
+    <div class="card"><div class="row sp"><h2>Career path</h2>${admin && !self ? html`<button class="btn sm" data-act="setLevel" data-uid="${uid}">Change level</button>` : ''}</div>
       <div class="ladder">${g.levels.map((l) => html`<div class="step ${l.id === g.level?.id ? 'cur' : l.rank < curRank ? 'done' : ''}"><div>${l.rank < curRank ? '✓ ' : ''}${l.name}</div><div class="small">${l.description}</div></div>`)}</div>
-      ${g.history.length ? html`<div class="small muted" style="margin-top:10px">${g.history.map((h) => `${h.from_date}: ${h.level}${h.note ? ' (' + h.note + ')' : ''}`).join('  ·  ')}</div>` : ''}</div>
-    <div class="card"><div class="row sp"><h2>Goals & targets</h2>${mgr ? html`<button class="btn sm primary" data-act="goalAdd" data-uid="${uid}">+ Goal</button>` : ''}</div>
-      ${g.goals.length ? g.goals.map(goalCard) : html`<div class="empty">No goals yet.</div>`}</div>
-    <div class="card"><h2>Where the time goes <span class="muted small">(last 30 days vs previous 30)</span></h2>
-      ${g.skills.length ? html`<div class="tscroll"><table><tr><th>Task item</th><th class="right">Days</th><th class="right">Before</th><th class="right">Speed</th></tr>
-      ${g.skills.map((s) => html`<tr><td>${s.task_type}</td><td class="right"><b>${fmtD(s.days)}</b></td><td class="right muted">${s.prev_days == null ? '–' : fmtD(s.prev_days)}</td>
-        <td class="right">${s.hrs_per_unit ? html`${fmtH(s.hrs_per_unit)}/${s.unit} <span class="muted small">(team ${fmtH(s.team_hrs_per_unit)})</span>` : html`<span class="muted small">–</span>`}</td></tr>`)}</table></div>` : html`<div class="empty">Not enough data yet.</div>`}</div>
-    <div class="card"><div class="row sp"><h2>Feedback & milestones</h2>${mgr ? html`<button class="btn sm primary" data-act="noteAdd" data-uid="${uid}">+ Add</button>` : ''}</div>
-      ${g.notes.length ? g.notes.map((n) => html`<div class="note ${n.shared ? '' : 'priv'}"><div class="small muted">${n.created_at.slice(0, 10)} · ${n.author} · <span class="tag">${n.kind}</span> ${mgr ? (n.shared ? html`<span class="tag good">shared</span>` : html`<span class="tag warn">private</span>`) : ''}
-        ${mgr ? html` <a href="#" data-act="noteDel" data-id="${n.id}" class="small">delete</a>` : ''}</div><div>${n.body}</div></div>`) : html`<div class="empty">Nothing here yet.</div>`}</div>`);
+      ${g.history.length ? html`<div class="small muted" style="margin-top:10px">${g.history.map((h) => `${h.from_date}: ${h.level}${h.note ? ' (' + h.note + ')' : ''}`).join('  ·  ')}</div>` : ''}
+      <div class="small muted" style="margin-top:6px">${g.all_time.first_day ? `Logging since ${niceDate(g.all_time.first_day)} · ${fmtD(g.all_time.days)} working days in total` : ''}</div></div>`);
+}
+
+// ---------- CAREERS (admin) ----------
+async function viewCareers() {
+  shell('careers', html`<div class="empty">Loading…</div>`);
+  const { people } = await get('/careers');
+  const tone = (p) => (p == null ? '' : p >= 90 ? 'good' : p >= 70 ? 'warn' : 'bad');
+  mount($('#view'), html`<h1>Careers</h1><p class="muted" style="margin-top:-8px">Last 90 days. Open a person to see their performance, goals, feedback and level.</p>
+    <div class="grid g3">${people.map((p) => html`<a class="card person ${p.active ? '' : 'inactive'}" href="#growth-${p.id}">
+      <div class="row sp"><b>${p.name}</b>${p.open_updates ? html`<span class="badge" title="Open goals / milestones they added">${p.open_updates}</span>` : ''}</div>
+      <div class="small muted">${[p.role === 'leader' ? 'Team leader' : p.job_title, p.level].filter(Boolean).join(' · ') || '–'}</div>
+      <div class="row" style="margin-top:10px;gap:6px"><span class="tag ${tone(p.completeness)}">${p.completeness == null ? 'no workdays yet' : p.completeness + '% complete'}</span><span class="tag">${fmtD(p.days)} days</span></div>
+      <div class="small" style="margin-top:8px">${p.top_task ? html`Mostly <b>${p.top_task}</b>${p.top_project ? html` on <b>${p.top_project}</b>` : ''}` : html`<span class="muted">No entries in this period</span>`}</div></a>`)}</div>`);
+}
+
+// ---------- TEAM LOG (admin) ----------
+const TL = { from: null, to: null, user: '', project: '' };
+async function viewTeamLog() {
+  shell('teamlog', html`<div class="empty">Loading…</div>`);
+  TL.to ||= today(); TL.from ||= addDays(TL.to, -6);
+  const [{ entries }, { users }] = await Promise.all([get('/entries' + qs({ all: 1, from: TL.from, to: TL.to, user_id: TL.user, project_id: TL.project })), get('/users')]);
+  window._teamlog = entries;
+  const byDate = {}; entries.forEach((e) => (byDate[e.work_date] ||= []).push(e));
+  const total = entries.reduce((s, e) => s + e.days, 0);
+  const people = users.filter((u) => u.role !== 'admin');
+  mount($('#view'), html`<h1>Log</h1>
+    <div class="card"><div class="grid g4">
+      <div><label class="f" for="tlFrom">From</label><input type="date" id="tlFrom" data-change="tl" name="from" value="${TL.from}"></div>
+      <div><label class="f" for="tlTo">To</label><input type="date" id="tlTo" data-change="tl" name="to" value="${TL.to}"></div>
+      <div><label class="f" for="tlUser">Person</label><select id="tlUser" data-change="tl" name="user"><option value="">Everyone</option>${people.map((u) => html`<option value="${u.id}" ${String(TL.user) === String(u.id) ? raw('selected') : ''}>${u.name}</option>`)}</select></div>
+      <div><label class="f" for="tlProject">Project</label><select id="tlProject" data-change="tl" name="project"><option value="">All projects</option>${catalog.projects.map((p) => html`<option value="${p.id}" ${String(TL.project) === String(p.id) ? raw('selected') : ''}>${p.name}</option>`)}</select></div></div>
+      <div class="small muted" style="margin-top:10px">${entries.length} lines · ${fmtD(total)} days${entries.length >= 3000 ? ' · showing the first 3000, narrow the dates' : ''}</div></div>
+    ${Object.keys(byDate).length ? Object.keys(byDate).sort().reverse().map((d) => html`<div class="card"><div class="day-h" style="margin-top:0"><span>${niceDate(d)}</span><span class="muted small">${byDate[d].length} lines</span></div>
+      <div class="tscroll"><table>${byDate[d].map((e) => html`<tr><td class="nowrap"><b>${e.user}</b></td><td><span class="tag">Task ${e.task_seq}</span></td><td>${e.project} · ${e.task_type}${e.quantity ? html` <span class="muted small">×${e.quantity}</span>` : ''}<div class="small muted">${e.description}</div></td>
+        <td class="right nowrap"><b>${fmtD(e.days)}</b></td><td class="right nowrap"><button class="btn sm" data-act="tlEdit" data-id="${e.id}">Edit</button> <button class="btn sm danger" data-act="tlDel" data-id="${e.id}" aria-label="Delete">✕</button></td></tr>`)}</table></div></div>`)
+      : html`<div class="card empty">No lines for these filters.</div>`}`);
 }
 
 // ---------- DASHBOARD ----------
@@ -340,35 +409,43 @@ function dayChart(byDay, from, to) {
 }
 async function viewDash() {
   shell('dash', html`<div class="empty">Loading…</div>`);
+  const role = me.role, member = role === 'member', leader = role === 'leader';
   const to = today(), from = addDays(to, -(D.days - 1));
   const mine = scopedProjects();
-  if (catalog.my_project_ids && !mine.length) return mount($('#view'), html`<h1>Dashboard</h1><div class="card empty"><b>No projects assigned to you yet.</b><br>When the admin assigns you as team leader of a project, its team performance appears here.</div>`);
   if (D.project && !mine.some((p) => p.id === D.project)) D.project = null;
   const o = await get('/dash/overview' + qs({ from, to, project_id: D.project }));
   const t = o.totals, behind = o.people.filter((p) => p.missing.length || p.partial.length).sort((a, b) => b.missing.length - a.missing.length);
   const tasks = o.by_task.slice(0, 8), people = o.by_person;
   const mx = Object.fromEntries(o.matrix.map((r) => [`${r.user_id}|${r.task_type_id}`, r.days]));
   const mmax = Math.max(...o.matrix.map((r) => r.days), 0.0001);
-  const projSel = html`<select data-change="dashProject" style="width:auto;max-width:100%"><option value="">${catalog.my_project_ids ? 'All my projects' : 'All projects'}</option>${mine.map((p) => html`<option value="${p.id}" ${D.project === p.id ? raw('selected') : ''}>${p.name}</option>`)}</select>`;
-  mount($('#view'), html`<div class="row sp"><h1>Dashboard${D.project ? html` <span class="muted" style="font-weight:500">· ${byId(catalog.projects, D.project)?.name}</span>` : ''}</h1><div class="row">${projSel}${rangeSel('dashRange', D.days)}</div></div>
-    ${catalog.my_project_ids ? html`<p class="small muted" style="margin-top:-6px">Showing everyone's work on the projects you lead: ${mine.map((p) => p.name).join(', ')}.</p>` : ''}
-    <div class="grid g4"><div class="kpi"><b>${fmtD(t.days)}</b><span>working days logged</span></div><div class="kpi"><b>${fmtD(t.leave_days)}</b><span>days off / leave</span></div>
-      <div class="kpi"><b>${t.people}</b><span>people logging</span></div><div class="kpi"><b>${behind.length}</b><span>need follow-up</span></div></div>
-    ${behind.length ? html`<div class="card" style="margin-top:14px;border-color:var(--warn)"><h2>⚠ Needs follow-up <span class="muted small">(workdays with nothing logged or less than 1 day)</span></h2>
-      <div class="tscroll"><table><tr><th>Person</th><th class="right">Complete</th><th>Missing days</th><th>Partial days</th></tr>
-      ${behind.map((p) => html`<tr><td><a href="#growth-${p.id}"><b>${p.name}</b></a>${p.email ? '' : html` <span class="tag warn">no email</span>`}</td><td class="right">${p.complete}/${p.expected}</td>
-        <td>${p.missing.length ? html`<b>${p.missing.length}</b> <span class="small muted">— latest ${p.missing.slice(-3).map(shortDate).join(', ')}</span>` : '–'}</td>
-        <td>${p.partial.length ? html`<b>${p.partial.length}</b> <span class="small muted">— latest ${p.partial.slice(-2).map((x) => `${shortDate(x.date)} (${fmtD(x.days)})`).join(', ')}</span>` : '–'}</td></tr>`)}</table></div></div>`
-      : html`<div class="card" style="margin-top:14px"><b>✓ Everyone is up to date in this period.</b></div>`}
-    <div class="card"><h2>Days logged per day (whole team)</h2>${dayChart(o.by_day, o.from, o.to)}</div>
+  const self = o.people.find((p) => p.id === me.id);
+  const projSel = member ? '' : html`<select data-change="dashProject" style="width:auto;max-width:100%" aria-label="Project"><option value="">${leader ? 'My work + my projects' : 'All projects'}</option>${mine.map((p) => html`<option value="${p.id}" ${D.project === p.id ? raw('selected') : ''}>${p.name}</option>`)}</select>`;
+  const tools = html`<div class="row"><a class="btn sm primary" href="#export">${raw(svg('<path d="M12 4v12M6 10l6 6 6-6M4 20h16"/>'))} Export</a>${!member ? html`<a class="btn sm" href="#prod">Speed per unit</a>` : ''}${leader ? html`<a class="btn sm" href="#projects">Projects & proposals</a>` : ''}</div>`;
+  const pct = self && self.expected ? Math.round((self.complete / self.expected) * 100) : null;
+  mount($('#view'), html`<div class="row sp"><h1>${member ? 'My dashboard' : 'Dashboard'}${D.project ? html` <span class="muted" style="font-weight:500">· ${byId(catalog.projects, D.project)?.name}</span>` : ''}</h1><div class="row">${projSel}${rangeSel('dashRange', D.days)}</div></div>
+    <div class="row sp" style="margin:-4px 0 12px">${leader ? html`<p class="small muted" style="margin:0">Your own work plus everyone's work on the projects you lead${mine.length ? ': ' + mine.map((p) => p.name).join(', ') : ' (none assigned yet)'}.</p>` : html`<span></span>`}${tools}</div>
+    ${member ? html`<div class="grid g4"><div class="kpi"><b>${fmtD(t.days)}</b><span>working days logged</span></div><div class="kpi"><b>${fmtD(t.leave_days)}</b><span>days off / leave</span></div>
+        <div class="kpi"><b>${pct == null ? '–' : pct + '%'}</b><span>workdays complete${self ? ` (${self.complete}/${self.expected})` : ''}</span></div><div class="kpi"><b>${self ? self.missing.length : 0}</b><span>missing days</span></div></div>
+      ${self && (self.missing.length || self.partial.length) ? html`<div class="card" style="margin-top:14px;border-color:var(--warn)"><h2>Days to complete</h2><p class="small muted" style="margin-top:-4px">Tap a day to fill it in.</p>
+        <div class="chips">${self.missing.slice(-12).reverse().map((d) => html`<button class="chip" data-act="goLogDate" data-date="${d}">${niceDate(d)} · missing</button>`)}${self.partial.slice(-6).reverse().map((x) => html`<button class="chip" data-act="goLogDate" data-date="${x.date}">${niceDate(x.date)} · ${fmtD(x.days)}/1</button>`)}</div></div>`
+        : html`<div class="card" style="margin-top:14px"><b>✓ Your timesheet is complete for this period.</b></div>`}`
+    : html`<div class="grid g4"><div class="kpi"><b>${fmtD(t.days)}</b><span>working days logged</span></div><div class="kpi"><b>${fmtD(t.leave_days)}</b><span>days off / leave</span></div>
+        <div class="kpi"><b>${t.people}</b><span>people logging</span></div><div class="kpi"><b>${behind.length}</b><span>need follow-up</span></div></div>
+      ${behind.length ? html`<div class="card" style="margin-top:14px;border-color:var(--warn)"><h2>⚠ Needs follow-up <span class="muted small">(workdays with nothing logged or less than 1 day)</span></h2>
+        <div class="tscroll"><table><tr><th>Person</th><th class="right">Complete</th><th>Missing days</th><th>Partial days</th></tr>
+        ${behind.map((p) => html`<tr><td>${isAdmin() ? html`<a href="#growth-${p.id}"><b>${p.name}</b></a>` : html`<b>${p.name}</b>`}${p.email || !isAdmin() ? '' : html` <span class="tag warn">no email</span>`}</td><td class="right">${p.complete}/${p.expected}</td>
+          <td>${p.missing.length ? html`<b>${p.missing.length}</b> <span class="small muted">— latest ${p.missing.slice(-3).map(shortDate).join(', ')}</span>` : '–'}</td>
+          <td>${p.partial.length ? html`<b>${p.partial.length}</b> <span class="small muted">— latest ${p.partial.slice(-2).map((x) => `${shortDate(x.date)} (${fmtD(x.days)})`).join(', ')}</span>` : '–'}</td></tr>`)}</table></div></div>`
+        : html`<div class="card" style="margin-top:14px"><b>✓ Everyone is up to date in this period.</b></div>`}`}
+    <div class="card"><h2>Days logged per day${member ? '' : ' (whole team)'}</h2>${dayChart(o.by_day, o.from, o.to)}</div>
     <div class="grid g2">
       <div class="card"><h2>Days by project</h2>${o.by_project.length ? bars(o.by_project, { label: (r) => r.name, value: (r) => r.days, text: (r) => fmtD(r.days) }) : html`<div class="empty">No data</div>`}</div>
-      <div class="card"><h2>Days by person</h2>${people.length ? bars(people, { label: (r) => r.name, value: (r) => r.days, text: (r) => fmtD(r.days) }) : html`<div class="empty">No data</div>`}</div>
-      <div class="card"><h2>Days by task item</h2>${o.by_task.length ? bars(o.by_task, { label: (r) => r.name, value: (r) => r.days, text: (r) => fmtD(r.days) }) : ''}</div>
-      <div class="card"><h2>Days by scope</h2>${o.by_scope.length ? bars(o.by_scope, { label: (r) => r.name, value: (r) => r.days, text: (r) => fmtD(r.days) }) : ''}</div>
+      ${member ? '' : html`<div class="card"><h2>Days by person</h2>${people.length ? bars(people, { label: (r) => r.name, value: (r) => r.days, text: (r) => fmtD(r.days) }) : html`<div class="empty">No data</div>`}</div>`}
+      <div class="card"><h2>Days by task item</h2>${o.by_task.length ? bars(o.by_task, { label: (r) => r.name, value: (r) => r.days, text: (r) => fmtD(r.days) }) : html`<div class="empty">No data</div>`}</div>
+      <div class="card"><h2>Days by scope</h2>${o.by_scope.length ? bars(o.by_scope, { label: (r) => r.name, value: (r) => r.days, text: (r) => fmtD(r.days) }) : html`<div class="empty">No data</div>`}</div>
     </div>
-    <div class="card"><h2>Who spends time on what <span class="muted small">(days)</span></h2><div class="tscroll"><table><tr><th>Person</th>${tasks.map((x) => html`<th class="right">${x.name}</th>`)}</tr>
-      ${people.map((p) => html`<tr><td>${p.name}</td>${tasks.map((x) => { const v = mx[`${p.id}|${x.id}`] || 0; return html`<td class="right" style="background:color-mix(in srgb, var(--brand) ${Math.round((v / mmax) * 45)}%, transparent)">${v ? fmtD(v) : ''}</td>`; })}</tr>`)}</table></div></div>`);
+    ${member ? '' : html`<div class="card"><h2>Who spends time on what <span class="muted small">(days)</span></h2><div class="tscroll"><table><tr><th>Person</th>${tasks.map((x) => html`<th class="right">${x.name}</th>`)}</tr>
+      ${people.map((p) => html`<tr><td>${p.name}</td>${tasks.map((x) => { const v = mx[`${p.id}|${x.id}`] || 0; return html`<td class="right" style="background:color-mix(in srgb, var(--brand) ${Math.round((v / mmax) * 45)}%, transparent)">${v ? fmtD(v) : ''}</td>`; })}</tr>`)}</table></div></div>`}`);
 }
 
 // ---------- SPEED (productivity) ----------
@@ -466,7 +543,7 @@ async function viewExport() {
   const st = { from: df, to: dt, format: saved.format || 'xlsx', columns: saved.columns || opt.columns.filter((c) => c.def).map((c) => c.key),
     sheets: saved.sheets || opt.sheets.filter((c) => c.def).map((c) => c.key), users: [], projects: [] };
   const people = users;
-  const projs = scopedProjects();
+  const projs = catalog.projects.filter((p) => !p.is_leave);
   const chk = (group, key, label, on, disabled) => html`<label class="chip ${on ? 'on' : ''}" style="cursor:pointer;${disabled ? 'opacity:.45;pointer-events:none' : ''}"><input type="checkbox" data-g="${group}" value="${key}" ${on ? raw('checked') : ''} style="display:none">${label}</label>`;
   const draw = () => {
     const csv = st.format === 'csv';
@@ -481,8 +558,8 @@ async function viewExport() {
       <div class="card"><div class="row sp"><h2>Columns of the timesheet lines</h2><button class="btn sm ghost" data-act="exColsDefault">Same as the old Excel</button></div>
         <div class="chips">${opt.columns.map((c) => chk('columns', c.key, c.label, st.columns.includes(c.key)))}</div></div>
       <div class="grid g2">
-        <div class="card"><div class="row sp"><h2>People</h2><span class="small muted">${st.users.length ? `${st.users.length} selected` : 'everyone'}</span></div>
-          <div class="chips">${people.map((u) => chk('users', u.id, u.name, st.users.includes(u.id)))}</div></div>
+        ${me.role === 'member' ? html`<div class="card"><h2>People</h2><p class="small muted">Your own lines only.</p></div>` : html`<div class="card"><div class="row sp"><h2>People</h2><span class="small muted">${st.users.length ? `${st.users.length} selected` : 'everyone'}</span></div>
+          <div class="chips">${people.map((u) => chk('users', u.id, u.name, st.users.includes(u.id)))}</div></div>`}
         <div class="card"><div class="row sp"><h2>Projects</h2><span class="small muted">${st.projects.length ? `${st.projects.length} selected` : 'all projects'}</span></div>
           <div class="chips">${projs.map((p) => chk('projects', p.id, p.name, st.projects.includes(p.id)))}</div></div></div>
       <div class="card stickybar"><div class="row sp"><span class="small muted">${niceDate(st.from)} → ${niceDate(st.to)} · ${csv ? 'CSV' : 'Excel'}</span>
@@ -544,13 +621,12 @@ async function viewEmails() {
 
 // ---------- SETUP ----------
 async function viewSetup() {
-  shell('setup', html`<div class="empty">Loading…</div>`);
+  shell('lists', html`<div class="empty">Loading…</div>`);
   await loadCatalog();
   const list = (title, items, addAct, editAct, sub) => html`<div class="card"><div class="row sp"><h2>${title}</h2><button class="btn sm primary" data-act="${addAct}">+ Add</button></div>
     ${items.length ? items.map((i) => html`<div class="row sp" style="padding:8px 0;border-bottom:1px solid var(--line);${i.active === 0 ? 'opacity:.5' : ''}"><div>${i.name}<div class="small muted">${sub(i)}</div></div><button class="btn sm" data-act="${editAct}" data-id="${i.id}">Edit</button></div>`) : html`<div class="empty">None yet</div>`}</div>`;
   mount($('#view'), html`<h1>Setup</h1>
     <p class="muted">These lists feed the quick-pick buttons on the timesheet. Archive instead of deleting so history is kept.</p>
-    ${list('Projects', catalog.projects, 'projAdd', 'projEdit', (p) => `scope: ${byId(catalog.scopes, p.default_scope_id)?.name || '–'}${p.leaders?.length ? ' · leader: ' + p.leaders.join(', ') : p.is_leave ? '' : ' · no leader'}${p.is_leave ? ' · leave' : ''}${p.active ? '' : ' · archived'}`)}
     ${list('Task items', catalog.task_types, 'taskAdd', 'taskEdit', (t) => `${t.track_qty ? `asks “how many ${t.unit_label}s?”` : 'time only'}${t.is_leave ? ' · leave' : ''}${t.active ? '' : ' · archived'}`)}
     ${list('Scopes', catalog.scopes, 'scopeAdd', 'scopeEdit', (s) => (s.active ? '' : 'archived'))}
     ${list('Career levels', catalog.levels.map((l) => ({ ...l, active: 1 })), 'lvlAdd', 'lvlEdit', (l) => `#${l.rank} · ${l.description}`)}`);
@@ -619,6 +695,25 @@ const actions = {
       toast(`Downloaded ${name} — ${r.headers.get('X-Row-Count')} timesheet lines`);
     } catch (e) { toast(e.message, true); } finally { el.disabled = false; el.textContent = '⤓ Download'; }
   },
+  goLogDate: (el) => { L.date = el.dataset.date; resetForm(); location.hash = 'log'; },
+  careerAdd: () => careerForm(),
+  careerEdit: (el) => careerForm(window._growth.updates.find((u) => u.id === Number(el.dataset.id))),
+  careerToggle: async (el) => { if (await attempt(() => put('/career/' + el.dataset.id, { status: el.dataset.status }), el.dataset.status === 'done' ? 'Marked done' : 'Reopened')) route(); },
+  careerDel: async (el) => { if (await ask('Delete this goal or milestone?', { ok: 'Delete', danger: true }) && await attempt(() => del('/career/' + el.dataset.id), 'Deleted')) route(); },
+  careerNote: async (el) => {
+    const u = window._growth.updates.find((x) => x.id === Number(el.dataset.id));
+    const v = await formDialog({ title: 'Note for ' + window._growth.user.name.split(' ')[0], fields: [fld('admin_note', 'Your note (they will see it)', { type: 'textarea' })], values: u });
+    if (v && await attempt(() => put('/career/' + u.id, v), 'Saved')) route();
+  },
+  tlEdit: async (el) => {
+    const e = window._teamlog.find((x) => x.id === Number(el.dataset.id));
+    const v = await formDialog({ title: `Edit ${e.user}'s line`, fields: [fld('work_date', 'Date', { type: 'date', required: true }),
+      fld('project_id', 'Project', { type: 'select', options: catalog.projects.filter((p) => p.active).map((p) => ({ value: p.id, label: p.name })) }),
+      fld('task_type_id', 'Task item', { type: 'select', options: catalog.task_types.filter((t) => t.active).map((t) => ({ value: t.id, label: t.name })) }),
+      fld('days', 'Days (0.05 – 1)', { type: 'number', step: '0.05', required: true }), fld('quantity', 'Quantity (optional)', { type: 'number' }), fld('description', 'Task description')], values: e });
+    if (v && await attempt(() => put('/entries/' + e.id, { ...v, quantity: v.quantity === '' ? null : Number(v.quantity) }), 'Saved')) viewTeamLog();
+  },
+  tlDel: async (el) => { if (await ask('Delete this timesheet line?', { ok: 'Delete', danger: true }) && await attempt(() => del('/entries/' + el.dataset.id), 'Deleted')) viewTeamLog(); },
   userAdd: () => userForm(), userEdit: (el) => userForm(window._users.find((u) => u.id === Number(el.dataset.id))),
   projAdd: () => projectForm(), projEdit: (el) => projectForm(byId(catalog.projects, el.dataset.id)),
   taskAdd: () => taskForm(), taskEdit: (el) => taskForm(byId(catalog.task_types, el.dataset.id)),
@@ -683,6 +778,13 @@ async function userForm(u) {
   if (!v) return;
   if (await attempt(() => (u ? put('/users/' + u.id, v) : post('/users', v)), 'Saved')) viewTeam();
 }
+async function careerForm(u) {
+  const v = await formDialog({ title: u ? 'Edit' : 'Add a goal or milestone', submit: u ? 'Save' : 'Add', fields: [
+    fld('kind', 'Type', { type: 'select', options: [{ value: 'goal', label: 'Goal — something I am working towards' }, { value: 'milestone', label: 'Milestone — something I achieved' }] }),
+    fld('title', 'Title', { required: true }), fld('target_date', 'Target or achieved date', { type: 'date' }), fld('details', 'Details (optional)', { type: 'textarea' })],
+    values: u || { kind: 'goal' } });
+  if (v && await attempt(() => (u ? put('/career/' + u.id, v) : post('/me/career', v)), u ? 'Saved' : 'Added — the admin can see it')) route();
+}
 async function goalForm(uid, g) {
   const tracked = catalog.task_types.filter((t) => t.active && !t.is_leave);
   const v = await formDialog({ title: g ? 'Edit goal' : 'New goal', fields: [
@@ -707,7 +809,8 @@ document.addEventListener('click', (e) => {
 document.addEventListener('change', (e) => {
   const a = e.target.dataset?.change; if (!a) return;
   const v = e.target.value;
-  if (a === 'dashRange') { D.days = Number(v); viewDash(); }
+  if (a === 'tl') { TL[e.target.name] = v; viewTeamLog(); }
+  else if (a === 'dashRange') { D.days = Number(v); viewDash(); }
   else if (a === 'dashProject') { D.project = v ? Number(v) : null; viewDash(); }
   else if (a === 'prodRange') { P.days = Number(v); viewProd(); }
   else if (a === 'prodTask') { P.task = Number(v); viewProd(); }
@@ -720,21 +823,24 @@ async function loadCatalog() { catalog = await get('/catalog'); }
 async function route() {
   if (!me) return renderLogin();
   const h = location.hash.replace(/^#\/?/, '');
-  const [page = 'log', arg] = h.includes('/') ? h.split('/') : (h.match(/^([a-z]+)(?:-(\d+))?$/) || [, h || 'log']).slice(1);
-  const guard = { dash: isMgr, prod: isMgr, team: isMgr, projects: isMgr, export: isMgr, setup: isAdmin, emails: isAdmin };
-  if (guard[page] && !guard[page]()) { location.hash = '#log'; return; }
+  const [page = 'log', arg] = h.includes('/') ? h.split('/') : (h.match(/^([a-z]+)(?:-(\d+))?$/) || [, '']).slice(1);
+  if (!page) { location.hash = home(); return; }
+  const guard = { prod: isMgr, projects: isMgr, team: isAdmin, setup: isAdmin, lists: isAdmin, emails: isAdmin, careers: isAdmin, teamlog: isAdmin };
+  if (guard[page] && !guard[page]()) { location.hash = home(); return; }
   try {
     if (page === 'log') await viewLog();
     else if (page === 'history') await viewHistory();
     else if (page === 'growth') await viewGrowth(arg);
     else if (page === 'dash') { if (arg) D.project = Number(arg) || null; await viewDash(); }
     else if (page === 'prod') await viewProd();
-    else if (page === 'team') await viewTeam();
-    else if (page === 'emails') await viewEmails();
-    else if (page === 'setup') await viewSetup();
-    else if (page === 'projects') await viewProjects();
     else if (page === 'export') await viewExport();
-    else location.hash = '#log';
+    else if (page === 'careers') await viewCareers();
+    else if (page === 'teamlog') await viewTeamLog();
+    else if (page === 'team') { await viewTeam(); withTabs('team'); }
+    else if (page === 'emails') { await viewEmails(); withTabs('emails'); }
+    else if (page === 'lists') { await viewSetup(); withTabs('lists'); }
+    else if (page === 'setup' || page === 'projects') { await viewProjects(); withTabs('setup'); }
+    else location.hash = home();
     if (page === 'log' && L._openEdit) { const id = L._openEdit; L._openEdit = null; const el = document.createElement('i'); el.dataset.id = id; actions.edit(el); }
     if (page !== 'log') scrollTo(0, 0);
   } catch (e) { if (e.message !== 'signed out') mount($('#view') || $('#app'), html`<div class="card empty">${e.message}</div>`); }
@@ -744,7 +850,7 @@ window.addEventListener('hashchange', route);
 async function boot() {
   try { ({ user: me } = await get('/me')); await loadCatalog(); } catch { me = null; }
   if (!me) return renderLogin();
-  if (!location.hash) location.hash = '#log';
+  if (!location.hash) location.hash = home();
   route();
 }
 boot();
