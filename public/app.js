@@ -141,8 +141,8 @@ NI.menu = svg('<path d="M4 7h16M4 12h16M4 17h16"/>');
 NI.clock = svg('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>');
 NI.cal = svg('<rect x="4" y="5" width="16" height="16" rx="2"/><path d="M8 3v4M16 3v4M4 10h16M8 14h.01M12 14h.01M16 14h.01M8 17.5h.01M12 17.5h.01"/>');
 const navFor = () => (isAdmin()
-  ? { left: [['dash', 'Home — dashboard', NI.home], ['teamlog', 'Team log', NI.log]], plus: ['log', 'New entry'], right: [['careers', 'Careers', NI.people], ['setup', 'Setup', NI.menu, () => catalog.pending_proposals]] }
-  : { left: [['dash', 'Home — dashboard', NI.home], ['history', 'My log', NI.log]], plus: ['log', 'New entry'], right: [['growth', 'Career & goals', NI.people], ['me', 'Settings', NI.menu]] });
+  ? { left: [['teamlog', 'Team log', NI.log], ['log', 'New entry', NI.plus]], plus: ['dash', 'Home — dashboard', NI.home], right: [['careers', 'Careers', NI.people], ['setup', 'Setup', NI.menu, () => catalog.pending_proposals]] }
+  : { left: [['dash', 'Home — dashboard', NI.home], ['history', 'My log', NI.log]], plus: ['log', 'New entry', NI.plus], right: [['growth', 'Career & goals', NI.people], ['me', 'Settings', NI.menu]] });
 // sub-pages light up the icon they belong to
 const NAV_PARENT = { prod: 'dash', export: 'dash', projects: 'dash', team: 'setup', lists: 'setup', emails: 'setup' };
 const clockText = () => { const d = new Date(); return [d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }), d.toLocaleDateString('en-GB')]; };
@@ -156,7 +156,7 @@ function shell(active, body) {
     <main class="wrap" id="view">${body}</main>
     <nav class="dock" aria-label="Main"><div class="pill ${nav.plus ? 'has-plus' : ''}">
       <div class="pill-side">${nav.left.map(link)}</div>
-      ${nav.plus ? html`<a href="#${nav.plus[0]}" class="dock-plus ${on === nav.plus[0] ? 'on' : ''}" title="${nav.plus[1]}" aria-label="${nav.plus[1]}">${raw(NI.plus)}</a>` : ''}
+      ${nav.plus ? html`<a href="#${nav.plus[0]}" class="dock-plus ${on === nav.plus[0] ? 'on' : ''}" title="${nav.plus[1]}" aria-label="${nav.plus[1]}">${raw(nav.plus[2])}</a>` : ''}
       <div class="pill-side">${nav.right.map(link)}</div></div>
       <div class="dock-meta"><span>${raw(NI.clock)}<span class="dock-time">${time}</span></span><span>${raw(NI.cal)}<span class="dock-date">${date}</span></span></div></nav>`);
 }
