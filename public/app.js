@@ -499,7 +499,7 @@ const actions = {
 const scopeOpts = (none = '—') => [{ value: '', label: none }, ...catalog.scopes.filter((s) => s.active).map((s) => ({ value: s.id, label: s.name }))];
 async function projectForm(p) {
   const v = await formDialog({ title: p ? 'Edit project' : 'New project', fields: [fld('name', 'Project name', { required: true }), fld('code', 'Code (optional)'),
-    fld('default_scope_id', 'Default scope', { type: 'select', options: scopeOpts() }), fld('is_leave', 'This is a leave / day-off item', { type: 'checkbox' }), ...(p ? [fld('active', 'Active (shown on timesheet)', { type: 'checkbox' })] : [])],
+    fld('default_scope_id', 'Scope', { type: 'select', options: scopeOpts('— choose scope —'), help: 'Filled in automatically for everyone who logs time on this project.' }), fld('is_leave', 'This is a leave / day-off item', { type: 'checkbox' }), ...(p ? [fld('active', 'Active (shown on timesheet)', { type: 'checkbox' })] : [])],
     values: p ? { ...p, default_scope_id: p.default_scope_id ?? '', active: !!p.active, is_leave: !!p.is_leave } : {} });
   if (v && await attempt(() => (p ? put('/projects/' + p.id, v) : post('/projects', v)), 'Saved')) viewSetup();
 }

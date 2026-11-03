@@ -103,10 +103,16 @@ GET('/api/catalog', () => {
     settings: { hours_per_day: Number(s.hours_per_day), workdays: s.workdays, timezone: s.timezone, today: today() },
   };
 });
+const projectScope = (body) => {
+  const id = body.default_scope_id ? Number(body.default_scope_id) : null;
+  if (!id && !flag(body.is_leave, 0)) throw bad('Choose the project scope');
+  if (id && !db.prepare('SELECT 1 FROM scopes WHERE id=?').get(id)) throw bad('Unknown scope');
+  return id;
+};
 POST('/api/projects', ({ user, body }) => { requireRole(user, 'admin');
-  return { id: uniq(() => Number(db.prepare('INSERT INTO projects (name,code,default_scope_id,is_leave) VALUES (?,?,?,?)').run(str(body.name, 'name', { required: true, max: 120 }), str(body.code, 'code', { max: 30 }), body.default_scope_id ? Number(body.default_scope_id) : null, flag(body.is_leave, 0)).lastInsertRowid)) }; });
+  return { id: uniq(() => Number(db.prepare('INSERT INTO projects (name,code,default_scope_id,is_leave) VALUES (?,?,?,?)').run(str(body.name, 'name', { required: true, max: 120 }), str(body.code, 'code', { max: 30 }), projectScope(body), flag(body.is_leave, 0)).lastInsertRowid)) }; });
 PUT('/api/projects/:id', ({ user, body, params }) => { requireRole(user, 'admin');
-  uniq(() => db.prepare('UPDATE projects SET name=?,code=?,default_scope_id=?,is_leave=?,active=? WHERE id=?').run(str(body.name, 'name', { required: true, max: 120 }), str(body.code, 'code', { max: 30 }), body.default_scope_id ? Number(body.default_scope_id) : null, flag(body.is_leave, 0), flag(body.active), params.id)); return { ok: true }; });
+  uniq(() => db.prepare('UPDATE projects SET name=?,code=?,default_scope_id=?,is_leave=?,active=? WHERE id=?').run(str(body.name, 'name', { required: true, max: 120 }), str(body.code, 'code', { max: 30 }), projectScope(body), flag(body.is_leave, 0), flag(body.active), params.id)); return { ok: true }; });
 POST('/api/task_types', ({ user, body }) => { requireRole(user, 'admin');
   return { id: uniq(() => Number(db.prepare('INSERT INTO task_types (name,unit_label,track_qty,is_leave) VALUES (?,?,?,?)').run(str(body.name, 'name', { required: true, max: 80 }), str(body.unit_label, 'unit', { max: 30 }) || 'item', flag(body.track_qty, 0), flag(body.is_leave, 0)).lastInsertRowid)) }; });
 PUT('/api/task_types/:id', ({ user, body, params }) => { requireRole(user, 'admin');
