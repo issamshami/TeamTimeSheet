@@ -6,7 +6,7 @@ import { db, hashPassword, verifyPassword, seedIfEmpty, getSettings, setSettings
 import { suggest } from './suggest.js';
 import { overview, productivity, visibleUserIds, goalLiveValue, goalProgress, addDays, iso } from './analytics.js';
 import { startScheduler, sendReminders, sendWeeklyReport, sendTest, localNow, reminderRecipients, weeklyReportData } from './notifications.js';
-import { smtpConfigured } from './mailer.js';
+import { smtpConfigured, sendMail } from './mailer.js';
 import { importWorkbook } from './importer.js';
 
 const PUBLIC = new URL('../public/', import.meta.url).pathname;
@@ -101,6 +101,7 @@ GET('/api/catalog', () => {
     scopes: db.prepare('SELECT id,name,active FROM scopes ORDER BY active DESC, name').all(),
     levels: db.prepare('SELECT id,rank,name,description FROM levels ORDER BY rank').all(),
     settings: { hours_per_day: Number(s.hours_per_day), workdays: s.workdays, timezone: s.timezone, today: today() },
+    pending_proposals: db.prepare("SELECT COUNT(*) n FROM project_proposals WHERE status='pending'").get().n,
   };
 });
 const projectScope = (body) => {
@@ -117,6 +118,59 @@ POST('/api/task_types', ({ user, body }) => { requireRole(user, 'admin');
   return { id: uniq(() => Number(db.prepare('INSERT INTO task_types (name,unit_label,track_qty,is_leave) VALUES (?,?,?,?)').run(str(body.name, 'name', { required: true, max: 80 }), str(body.unit_label, 'unit', { max: 30 }) || 'item', flag(body.track_qty, 0), flag(body.is_leave, 0)).lastInsertRowid)) }; });
 PUT('/api/task_types/:id', ({ user, body, params }) => { requireRole(user, 'admin');
   uniq(() => db.prepare('UPDATE task_types SET name=?,unit_label=?,track_qty=?,is_leave=?,active=? WHERE id=?').run(str(body.name, 'name', { required: true, max: 80 }), str(body.unit_label, 'unit', { max: 30 }) || 'item', flag(body.track_qty, 0), flag(body.is_leave, 0), flag(body.active), params.id)); return { ok: true }; });
+// ---------- project proposals (leader proposes → admin approves) ----------
+const PROPOSAL_SELECT = `SELECT pp.*, s.name scope, u.name proposed_by_name, d.name decided_by_name FROM project_proposals pp
+  LEFT JOIN scopes s ON s.id=pp.scope_id JOIN users u ON u.id=pp.proposed_by LEFT JOIN users d ON d.id=pp.decided_by`;
+const escH = (x) => String(x ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const mailBox = (title, body) => `<div style="font-family:Segoe UI,Arial,sans-serif;max-width:620px;margin:auto;color:#16211f"><h2 style="color:#0f766e">${escH(title)}</h2>${body}${getSettings().app_url ? `<p><a href="${escH(getSettings().app_url)}/#/projects" style="background:#0f766e;color:#fff;padding:12px 20px;border-radius:10px;text-decoration:none;display:inline-block">Open Projects</a></p>` : ''}</div>`;
+GET('/api/proposals', ({ user }) => {
+  requireRole(user, 'admin', 'leader');
+  const rows = user.role === 'admin'
+    ? db.prepare(`${PROPOSAL_SELECT} ORDER BY (pp.status='pending') DESC, pp.id DESC LIMIT 200`).all()
+    : db.prepare(`${PROPOSAL_SELECT} WHERE pp.proposed_by=? ORDER BY pp.id DESC LIMIT 200`).all(user.id);
+  return { proposals: rows };
+});
+POST('/api/proposals', async ({ user, body }) => {
+  requireRole(user, 'leader', 'admin');
+  const name = str(body.name, 'project name', { required: true, max: 120 });
+  const scope_id = num(body.scope_id, 'scope', { int: true });
+  if (!db.prepare('SELECT 1 FROM scopes WHERE id=? AND active=1').get(scope_id)) throw bad('Unknown scope');
+  if (db.prepare('SELECT 1 FROM projects WHERE name=? COLLATE NOCASE').get(name)) throw bad('A project with this name already exists');
+  if (db.prepare("SELECT 1 FROM project_proposals WHERE name=? COLLATE NOCASE AND status='pending'").get(name)) throw bad('This project is already waiting for approval');
+  const note = str(body.note, 'note', { max: 1000 });
+  const id = Number(db.prepare('INSERT INTO project_proposals (name,scope_id,note,proposed_by) VALUES (?,?,?,?)').run(name, scope_id, note, user.id).lastInsertRowid);
+  const s = getSettings(), to = s.admin_email || db.prepare("SELECT email FROM users WHERE role='admin' AND email<>'' LIMIT 1").get()?.email || '';
+  const scope = db.prepare('SELECT name FROM scopes WHERE id=?').get(scope_id).name;
+  await sendMail({ kind: 'proposal', to, subject: `New project proposed: ${name}`,
+    html: mailBox('New project proposal', `<p><b>${escH(user.name)}</b> proposes a new project:</p><p style="font-size:18px"><b>${escH(name)}</b> — ${escH(scope)}</p>${note ? `<p>${escH(note)}</p>` : ''}<p>Approve or reject it in the app under <b>Projects</b>.</p>`) });
+  return { id };
+});
+async function decide(user, id, approve, body) {
+  requireRole(user, 'admin');
+  const pp = db.prepare('SELECT * FROM project_proposals WHERE id=?').get(id);
+  if (!pp) throw notFound();
+  if (pp.status !== 'pending') throw bad('This proposal was already decided');
+  let project_id = null, name = pp.name, scope_id = pp.scope_id;
+  if (approve) {
+    // the admin may adjust the name / scope while approving
+    name = str(body.name ?? pp.name, 'project name', { required: true, max: 120 });
+    scope_id = num(body.scope_id ?? pp.scope_id, 'scope', { int: true });
+    if (!db.prepare('SELECT 1 FROM scopes WHERE id=?').get(scope_id)) throw bad('Unknown scope');
+    project_id = uniq(() => Number(db.prepare('INSERT INTO projects (name,default_scope_id) VALUES (?,?)').run(name, scope_id).lastInsertRowid));
+  }
+  const reason = str(body.reason, 'reason', { max: 500 });
+  db.prepare("UPDATE project_proposals SET status=?, decided_by=?, decided_at=datetime('now'), reason=?, project_id=?, name=?, scope_id=? WHERE id=?")
+    .run(approve ? 'approved' : 'rejected', user.id, reason, project_id, name, scope_id, pp.id);
+  const leader = getUser(pp.proposed_by), scope = db.prepare('SELECT name FROM scopes WHERE id=?').get(scope_id)?.name || '';
+  await sendMail({ kind: 'proposal', to: leader.email, subject: `Project ${approve ? 'approved' : 'not approved'}: ${name}`,
+    html: mailBox(approve ? 'Project approved' : 'Project not approved', approve
+      ? `<p>Hi ${escH(leader.name.split(' ')[0])}, <b>${escH(name)}</b> (${escH(scope)}) is now available on everyone's timesheet.</p>${reason ? `<p>${escH(reason)}</p>` : ''}`
+      : `<p>Hi ${escH(leader.name.split(' ')[0])}, your proposal <b>${escH(pp.name)}</b> was not approved.</p>${reason ? `<p>Reason: ${escH(reason)}</p>` : ''}`) });
+  return { ok: true, project_id };
+}
+POST('/api/proposals/:id/approve', ({ user, params, body }) => decide(user, Number(params.id), true, body));
+POST('/api/proposals/:id/reject', ({ user, params, body }) => decide(user, Number(params.id), false, body));
+
 POST('/api/scopes', ({ user, body }) => { requireRole(user, 'admin');
   return { id: uniq(() => Number(db.prepare('INSERT INTO scopes (name) VALUES (?)').run(str(body.name, 'name', { required: true, max: 60 })).lastInsertRowid)) }; });
 PUT('/api/scopes/:id', ({ user, body, params }) => { requireRole(user, 'admin');

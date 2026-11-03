@@ -106,6 +106,20 @@ CREATE TABLE IF NOT EXISTS outbox (
   kind TEXT NOT NULL, to_addr TEXT NOT NULL, subject TEXT NOT NULL, html TEXT NOT NULL,
   status TEXT NOT NULL, error TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+-- team leaders propose new projects; only the admin turns a proposal into a real project
+CREATE TABLE IF NOT EXISTS project_proposals (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  scope_id INTEGER REFERENCES scopes(id),
+  note TEXT NOT NULL DEFAULT '',
+  proposed_by INTEGER NOT NULL REFERENCES users(id),
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected')),
+  decided_by INTEGER REFERENCES users(id),
+  decided_at TEXT,
+  reason TEXT NOT NULL DEFAULT '',
+  project_id INTEGER REFERENCES projects(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 CREATE TABLE IF NOT EXISTS job_runs (job TEXT NOT NULL, run_date TEXT NOT NULL, ran_at TEXT NOT NULL DEFAULT (datetime('now')), PRIMARY KEY (job, run_date));
 `);
 

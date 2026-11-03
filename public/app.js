@@ -86,12 +86,12 @@ const byId = (arr, id) => arr.find((x) => x.id === Number(id));
 // ---------- shell ----------
 const NAV = [
   ['log', '＋', 'Log time', () => true], ['history', '☰', 'My entries', () => true], ['growth', '↗', 'My growth', () => true],
-  ['dash', '▦', 'Dashboard', isMgr], ['prod', '⏱', 'Speed', isMgr], ['team', '☻', 'Team', isMgr], ['emails', '✉', 'Emails', isAdmin], ['setup', '⚙', 'Setup', isAdmin],
+  ['dash', '▦', 'Dashboard', isMgr], ['prod', '⏱', 'Speed', isMgr], ['team', '☻', 'Team', isMgr], ['projects', '◧', () => (isAdmin() && catalog.pending_proposals ? `Projects (${catalog.pending_proposals})` : 'Projects'), isMgr], ['emails', '✉', 'Emails', isAdmin], ['setup', '⚙', 'Setup', isAdmin],
 ];
 function shell(active, body) {
   mount($('#app'), html`<header class="top"><div class="brand"><img src="/icon.svg" alt=""> Team Timesheet</div>
     <div class="row small" style="flex-wrap:nowrap"><span class="muted hide-sm">${me.name}</span><button class="btn sm" data-act="pw">Password</button><button class="btn sm" data-act="logout">Sign out</button></div></header>
-    <nav class="bar">${NAV.filter((n) => n[3]()).map(([k, i, l]) => html`<a href="#/${k}" class="${k === active ? 'on' : ''}"><span class="i">${i}</span>${l}</a>`)}</nav>
+    <nav class="bar">${NAV.filter((n) => n[3]()).map(([k, i, l]) => html`<a href="#/${k}" class="${k === active ? 'on' : ''}"><span class="i">${i}</span>${typeof l === 'function' ? l() : l}</a>`)}</nav>
     <main class="wrap" id="view">${body}</main>`);
 }
 
@@ -366,6 +366,38 @@ async function viewTeam() {
   window._users = users;
 }
 
+
+// ---------- PROJECTS (leaders propose, admin approves) ----------
+async function viewProjects() {
+  shell('projects', html`<div class="empty">Loading…</div>`);
+  await loadCatalog(); shell('projects', html`<div class="empty">Loading…</div>`);
+  const { proposals } = await get('/proposals');
+  window._proposals = proposals;
+  const admin = isAdmin(), pending = proposals.filter((p) => p.status === 'pending'), decided = proposals.filter((p) => p.status !== 'pending');
+  const scopeName = (id) => byId(catalog.scopes, id)?.name || '–';
+  const stTag = (p) => html`<span class="tag ${p.status === 'approved' ? 'good' : p.status === 'rejected' ? 'bad' : 'warn'}">${p.status === 'pending' ? 'waiting for approval' : p.status}</span>`;
+  const row = (p, actions) => html`<div class="entry"><div class="t">${p.name} <span class="muted small">· ${p.scope || '–'}</span></div><div class="right">${stTag(p)}</div>
+    <div class="d">${admin ? `Proposed by ${p.proposed_by_name} · ` : ''}${p.created_at.slice(0, 10)}${p.note ? ' — ' + p.note : ''}${p.reason ? ` · ${p.status === 'rejected' ? 'Reason' : 'Note'}: ${p.reason}` : ''}${p.decided_by_name ? ` · decided by ${p.decided_by_name}` : ''}</div>
+    <div class="right nowrap">${actions || ''}</div></div>`;
+  mount($('#view'), html`<h1>Projects</h1>
+    ${admin ? html`<div class="card" style="${pending.length ? 'border-color:var(--warn)' : ''}"><div class="row sp"><h2>Waiting for your approval</h2><button class="btn sm primary" data-act="projAddHere">+ New project</button></div>
+        ${pending.length ? pending.map((p) => row(p, html`<button class="btn sm primary" data-act="propApprove" data-id="${p.id}">Approve</button> <button class="btn sm danger" data-act="propReject" data-id="${p.id}">Reject</button>`)) : html`<div class="empty">No proposals waiting.</div>`}</div>`
+      : html`<form class="card" id="propForm"><h2>Propose a new project</h2><p class="muted small">The admin reviews it; once approved it appears on everyone's timesheet with this scope.</p>
+        <div class="grid g2"><div><label class="f" for="pn">Project name</label><input id="pn" name="name" type="text" maxlength="120" required></div>
+        <div><label class="f" for="ps">Scope</label><select id="ps" name="scope_id" required><option value="">— choose scope —</option>${catalog.scopes.filter((x) => x.active).map((x) => html`<option value="${x.id}">${x.name}</option>`)}</select></div></div>
+        <div style="margin-top:10px"><label class="f" for="pnote">Note for the admin <span class="muted">(optional)</span></label><input id="pnote" name="note" type="text" maxlength="1000" placeholder="client, package, expected start…"></div>
+        <div class="row" style="margin-top:12px"><button class="btn primary" type="submit">Send proposal</button></div></form>
+        <div class="card"><h2>My proposals</h2>${proposals.length ? proposals.map((p) => row(p)) : html`<div class="empty">You haven't proposed any project yet.</div>`}</div>`}
+    ${admin && decided.length ? html`<div class="card"><h2>Decided</h2>${decided.slice(0, 30).map((p) => row(p))}</div>` : ''}
+    <div class="card"><h2>Active projects</h2><div class="tscroll"><table><tr><th>Project</th><th>Scope</th></tr>${catalog.projects.filter((p) => p.active && !p.is_leave).map((p) => html`<tr><td>${p.name}</td><td>${scopeName(p.default_scope_id)}</td></tr>`)}</table></div></div>`);
+  const f = $('#propForm');
+  if (f) f.onsubmit = async (e) => {
+    e.preventDefault();
+    const body = { name: f.elements.name.value, scope_id: f.elements.scope_id.value, note: f.elements.note.value };
+    if (await attempt(() => post('/proposals', body), 'Proposal sent to the admin')) viewProjects();
+  };
+}
+
 // ---------- EMAILS ----------
 const WD = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 async function viewEmails() {
@@ -465,6 +497,16 @@ const actions = {
       fld('share', 'Share a milestone with the employee', { type: 'checkbox', default: true })] });
     if (v && await attempt(() => post(`/users/${el.dataset.uid}/level`, v), 'Level updated')) route();
   },
+  propApprove: async (el) => {
+    const p = window._proposals.find((x) => x.id === Number(el.dataset.id));
+    const v = await formDialog({ title: 'Approve project', submit: 'Approve & create', fields: [fld('name', 'Project name', { required: true }), fld('scope_id', 'Scope', { type: 'select', options: scopeOpts('— choose scope —') }), fld('reason', 'Message to the leader (optional)')], values: { name: p.name, scope_id: p.scope_id } });
+    if (v && await attempt(() => post(`/proposals/${p.id}/approve`, v), `“${v.name}” created`)) viewProjects();
+  },
+  propReject: async (el) => {
+    const v = await formDialog({ title: 'Reject proposal', submit: 'Reject', danger: true, fields: [fld('reason', 'Reason (sent to the leader)', { type: 'textarea' })] });
+    if (v && await attempt(() => post(`/proposals/${el.dataset.id}/reject`, v), 'Rejected')) viewProjects();
+  },
+  projAddHere: () => projectForm(null, viewProjects),
   userAdd: () => userForm(), userEdit: (el) => userForm(window._users.find((u) => u.id === Number(el.dataset.id))),
   projAdd: () => projectForm(), projEdit: (el) => projectForm(byId(catalog.projects, el.dataset.id)),
   taskAdd: () => taskForm(), taskEdit: (el) => taskForm(byId(catalog.task_types, el.dataset.id)),
@@ -497,11 +539,11 @@ const actions = {
   },
 };
 const scopeOpts = (none = '—') => [{ value: '', label: none }, ...catalog.scopes.filter((s) => s.active).map((s) => ({ value: s.id, label: s.name }))];
-async function projectForm(p) {
+async function projectForm(p, after = viewSetup) {
   const v = await formDialog({ title: p ? 'Edit project' : 'New project', fields: [fld('name', 'Project name', { required: true }), fld('code', 'Code (optional)'),
     fld('default_scope_id', 'Scope', { type: 'select', options: scopeOpts('— choose scope —'), help: 'Filled in automatically for everyone who logs time on this project.' }), fld('is_leave', 'This is a leave / day-off item', { type: 'checkbox' }), ...(p ? [fld('active', 'Active (shown on timesheet)', { type: 'checkbox' })] : [])],
     values: p ? { ...p, default_scope_id: p.default_scope_id ?? '', active: !!p.active, is_leave: !!p.is_leave } : {} });
-  if (v && await attempt(() => (p ? put('/projects/' + p.id, v) : post('/projects', v)), 'Saved')) viewSetup();
+  if (v && await attempt(() => (p ? put('/projects/' + p.id, v) : post('/projects', v)), 'Saved')) after();
 }
 async function taskForm(t) {
   const v = await formDialog({ title: t ? 'Edit task item' : 'New task item', fields: [fld('name', 'Task item name', { required: true }),
@@ -569,7 +611,7 @@ async function loadCatalog() { catalog = await get('/catalog'); }
 async function route() {
   if (!me) return renderLogin();
   const [, page = 'log', arg] = location.hash.split('/');
-  const guard = { dash: isMgr, prod: isMgr, team: isMgr, setup: isAdmin, emails: isAdmin };
+  const guard = { dash: isMgr, prod: isMgr, team: isMgr, projects: isMgr, setup: isAdmin, emails: isAdmin };
   if (guard[page] && !guard[page]()) { location.hash = '#/log'; return; }
   try {
     if (page === 'log') await viewLog();
@@ -580,6 +622,7 @@ async function route() {
     else if (page === 'team') await viewTeam();
     else if (page === 'emails') await viewEmails();
     else if (page === 'setup') await viewSetup();
+    else if (page === 'projects') await viewProjects();
     else location.hash = '#/log';
     if (page === 'log' && L._openEdit) { const id = L._openEdit; L._openEdit = null; const el = document.createElement('i'); el.dataset.id = id; actions.edit(el); }
     if (page !== 'log') scrollTo(0, 0);
