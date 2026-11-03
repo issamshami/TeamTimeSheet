@@ -93,7 +93,7 @@ header.top .who{opacity:.85}
 .btn:disabled{opacity:.5}
 .btn.block{width:100%;font-size:1.05rem;min-height:52px}
 label.f{display:block;font-size:.85rem;font-weight:600;color:var(--muted);margin:0 0 4px}
-input[type=text],input[type=number],input[type=date],input[type=password],input[type=email],select,textarea{width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:11px;background:var(--surface);min-height:44px}
+input[type=text],input[type=search],input[type=number],input[type=date],input[type=time],input[type=password],input[type=email],select,textarea{width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:11px;background:var(--surface);min-height:44px}
 textarea{min-height:84px;resize:vertical}
 input:focus,select:focus,textarea:focus,button:focus-visible{outline:2px solid var(--brand);outline-offset:1px}
 .chips{display:flex;flex-wrap:wrap;gap:8px}
@@ -171,3 +171,26 @@ a.person.inactive{opacity:.55}
 .wrap .card{min-width:0}
 
 a.btn{text-decoration:none;display:inline-flex;align-items:center;gap:6px}
+
+/* team log spreadsheet */
+.sheet-meta{margin:4px 2px 8px}
+.sheet{overflow:auto;max-height:70vh;border:1px solid var(--line);border-radius:10px;background:var(--surface)}
+.sheet table{border-collapse:separate;border-spacing:0;font-size:.86rem;min-width:1100px}
+.sheet th,.sheet td{border-bottom:1px solid var(--line);border-right:1px solid var(--line);padding:0 8px;height:38px;white-space:nowrap}
+.sheet thead th{position:sticky;top:0;z-index:2;background:color-mix(in srgb,var(--brand) 9%,var(--surface));color:var(--ink);text-transform:none;letter-spacing:0;font-size:.8rem;padding:0}
+.sheet thead th button{all:unset;cursor:pointer;display:flex;gap:4px;align-items:center;padding:0 8px;height:38px;width:calc(100% - 16px);font-weight:700}
+.sheet thead th button:focus-visible{outline:2px solid var(--brand)}
+.sheet .sort{color:var(--brand);font-size:.7rem}
+.sheet tbody tr:nth-child(even) td{background:color-mix(in srgb,var(--muted) 5%,var(--surface))}
+.sheet tbody tr:hover td{background:color-mix(in srgb,var(--brand) 6%,var(--surface))}
+.sheet tr.leave td{color:var(--muted)}
+.sheet .rn{position:sticky;left:0;z-index:1;background:color-mix(in srgb,var(--brand) 9%,var(--surface))!important;color:var(--muted);text-align:center;width:38px;font-variant-numeric:tabular-nums}
+.sheet thead .rn{z-index:3}
+.sheet .num{text-align:right;font-variant-numeric:tabular-nums}
+.sheet td.wide{min-width:320px;padding:0}
+.sheet input.cell{width:100%;min-height:0;height:36px;border:0;border-radius:0;background:transparent;padding:0 8px;font-size:.86rem}
+.sheet input.cell.num{width:80px;text-align:right}
+.sheet input.cell:focus{outline:2px solid var(--brand);outline-offset:-2px;background:var(--surface)}
+.sheet tfoot td{position:sticky;bottom:0;background:color-mix(in srgb,var(--brand) 9%,var(--surface));font-weight:600}
+
+.wrap.wide{max-width:1500px}

@@ -153,7 +153,7 @@ function shell(active, body) {
   const nav = navFor(), [time, date] = clockText();
   mount($('#app'), html`${demoStrip()}<div class="topband"><header class="top"><div class="brand"><img src="${ICON}" alt=""> Team Timesheet</div>
     <div class="row small" style="flex-wrap:nowrap"><span class="who hide-sm">${me.name}</span>${themeBtn()}${isAdmin() ? html`<button class="btn sm icon-btn" data-act="pw" title="Change password" aria-label="Change password">${raw(ICONS.key)}<span class="hide-sm">Password</span></button><button class="btn sm icon-btn" data-act="logout" title="Sign out" aria-label="Sign out">${raw(ICONS.out)}<span class="hide-sm">Sign out</span></button>` : ''}</div></header></div>
-    <main class="wrap" id="view">${body}</main>
+    <main class="wrap ${active === 'teamlog' ? 'wide' : ''}" id="view">${body}</main>
     <nav class="dock" aria-label="Main"><div class="pill ${nav.plus ? 'has-plus' : ''}">
       <div class="pill-side">${nav.left.map(link)}</div>
       ${nav.plus ? html`<a href="#${nav.plus[0]}" class="dock-plus ${on === nav.plus[0] ? 'on' : ''}" title="${nav.plus[1]}" aria-label="${nav.plus[1]}">${raw(nav.plus[2])}</a>` : ''}
@@ -409,28 +409,59 @@ async function viewCareers() {
       <div class="small" style="margin-top:8px">${p.top_task ? html`Mostly <b>${p.top_task}</b>${p.top_project ? html` on <b>${p.top_project}</b>` : ''}` : html`<span class="muted">No entries in this period</span>`}</div></a>`)}</div>`);
 }
 
-// ---------- TEAM LOG (admin) ----------
-const TL = { from: null, to: null, user: '', project: '' };
+// ---------- TEAM LOG (admin): the whole team's lines as a spreadsheet ----------
+const TL = { from: null, to: null, user: '', project: '', q: '', sort: 'date', dir: -1 };
+const TL_COLS = [
+  ['date', 'Date'], ['user', 'Team Member'], ['task_seq', 'Task Number'], ['task_type', 'Task Item'], ['description', 'Task Description'],
+  ['project', 'Project'], ['days', 'Number of Days'], ['month', 'Month'], ['scope', 'Project Scope'],
+];
+const MON3 = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const tlVal = (e, k) => (k === 'date' ? e.work_date : k === 'month' ? e.work_date.slice(0, 7) : e[k] ?? '');
 async function viewTeamLog() {
   shell('teamlog', html`<div class="empty">Loading…</div>`);
-  TL.to ||= today(); TL.from ||= addDays(TL.to, -6);
-  const [{ entries }, { users }] = await Promise.all([get('/entries' + qs({ all: 1, from: TL.from, to: TL.to, user_id: TL.user, project_id: TL.project })), get('/users')]);
-  window._teamlog = entries;
-  const byDate = {}; entries.forEach((e) => (byDate[e.work_date] ||= []).push(e));
-  const total = entries.reduce((s, e) => s + e.days, 0);
+  TL.to ||= today(); TL.from ||= addDays(TL.to, -13);
+  const [r, { users }] = await Promise.all([get('/entries' + qs({ all: 1, from: TL.from, to: TL.to, user_id: TL.user, project_id: TL.project })), get('/users')]);
+  window._teamlog = r.entries; window._tlLatest = r.latest;
   const people = users.filter((u) => u.role !== 'admin');
-  mount($('#view'), html`<h1>Log</h1>
-    <div class="card"><div class="grid g4">
+  mount($('#view'), html`<div class="row sp"><h1>Team log</h1><div class="row"><button class="btn sm" data-act="tlNew">＋ Add a line</button><a class="btn sm primary" href="#export">${raw(svg('<path d="M12 4v12M6 10l6 6 6-6M4 20h16"/>'))} Export</a></div></div>
+    <div class="card sheet-filters"><div class="grid g4">
       <div><label class="f" for="tlFrom">From</label><input type="date" id="tlFrom" data-change="tl" name="from" value="${TL.from}"></div>
       <div><label class="f" for="tlTo">To</label><input type="date" id="tlTo" data-change="tl" name="to" value="${TL.to}"></div>
-      <div><label class="f" for="tlUser">Person</label><select id="tlUser" data-change="tl" name="user"><option value="">Everyone</option>${people.map((u) => html`<option value="${u.id}" ${String(TL.user) === String(u.id) ? raw('selected') : ''}>${u.name}</option>`)}</select></div>
+      <div><label class="f" for="tlUser">Team member</label><select id="tlUser" data-change="tl" name="user"><option value="">Everyone</option>${people.map((u) => html`<option value="${u.id}" ${String(TL.user) === String(u.id) ? raw('selected') : ''}>${u.name}</option>`)}</select></div>
       <div><label class="f" for="tlProject">Project</label><select id="tlProject" data-change="tl" name="project"><option value="">All projects</option>${catalog.projects.map((p) => html`<option value="${p.id}" ${String(TL.project) === String(p.id) ? raw('selected') : ''}>${p.name}</option>`)}</select></div></div>
-      <div class="small muted" style="margin-top:10px">${entries.length} lines · ${fmtD(total)} days${entries.length >= 3000 ? ' · showing the first 3000, narrow the dates' : ''}</div></div>
-    ${Object.keys(byDate).length ? Object.keys(byDate).sort().reverse().map((d) => html`<div class="card"><div class="day-h" style="margin-top:0"><span>${niceDate(d)}</span><span class="muted small">${byDate[d].length} lines</span></div>
-      <div class="tscroll"><table>${byDate[d].map((e) => html`<tr><td class="nowrap"><b>${e.user}</b></td><td><span class="tag">Task ${e.task_seq}</span></td><td>${e.project} · ${e.task_type}${e.quantity ? html` <span class="muted small">×${e.quantity}</span>` : ''}<div class="small muted">${e.description}</div></td>
-        <td class="right nowrap"><b>${fmtD(e.days)}</b></td><td class="right nowrap"><button class="btn sm" data-act="tlEdit" data-id="${e.id}">Edit</button> <button class="btn sm danger" data-act="tlDel" data-id="${e.id}" aria-label="Delete">✕</button></td></tr>`)}</table></div></div>`)
-      : html`<div class="card empty">No lines for these filters.</div>`}`);
+      <div class="row" style="margin-top:10px"><input type="search" id="tlQ" placeholder="Search in these lines (member, task, description, project…)" value="${TL.q}" autocomplete="off" style="flex:1;min-width:200px"></div></div>
+    <div id="tlSheet"></div>`);
+  drawSheet();
 }
+function drawSheet() {
+  const q = TL.q.trim().toLowerCase();
+  let rows = window._teamlog;
+  if (q) rows = rows.filter((e) => [e.user, e.task_type, e.description, e.project, e.scope, e.work_date].join(' ').toLowerCase().includes(q));
+  const k = TL.sort, dir = TL.dir;
+  rows = [...rows].sort((a, b) => { const x = tlVal(a, k), y = tlVal(b, k); const c = typeof x === 'number' && typeof y === 'number' ? x - y : String(x).localeCompare(String(y)); return c * dir || (a.work_date < b.work_date ? 1 : -1) || a.user.localeCompare(b.user) || a.task_seq - b.task_seq; });
+  const total = rows.reduce((s, e) => s + e.days, 0);
+  const fmtDay = (d) => new Date(d + 'T12:00:00').toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+  mount($('#tlSheet'), rows.length ? html`<div class="sheet-meta small muted">${rows.length} lines · ${fmtD(total)} days${window._teamlog.length >= 3000 ? ' · first 3000 shown, narrow the dates' : ''} · edit days and descriptions directly in the cells</div>
+    <div class="sheet"><table><thead><tr><th class="rn">#</th>${TL_COLS.map(([key, label]) => html`<th class="${key === 'days' || key === 'task_seq' ? 'num' : ''}"><button type="button" data-act="tlSort" data-k="${key}" aria-label="Sort by ${label}">${label}<span class="sort">${TL.sort === key ? (TL.dir > 0 ? '▲' : '▼') : ''}</span></button></th>`)}<th></th></tr></thead>
+    <tbody>${rows.map((e, i) => html`<tr${e.is_leave ? raw(' class="leave"') : ''}><td class="rn">${i + 1}</td><td class="nowrap">${fmtDay(e.work_date)}</td><td class="nowrap"><b>${e.user}</b></td><td class="num">Task ${e.task_seq}</td><td class="nowrap">${e.task_type}</td>
+      <td class="wide"><input class="cell" data-cell="description" data-id="${e.id}" value="${e.description}" aria-label="Task description"></td><td class="nowrap">${e.project}</td>
+      <td class="num"><input class="cell num" type="number" step="0.05" min="0.05" max="1" data-cell="days" data-id="${e.id}" value="${e.days}" aria-label="Number of days"></td>
+      <td class="nowrap">${MON3[+e.work_date.slice(5, 7) - 1]},${e.work_date.slice(0, 4)}</td><td>${e.scope || ''}</td>
+      <td class="nowrap"><button class="btn sm" data-act="tlEdit" data-id="${e.id}" title="Edit all fields">Edit</button> <button class="btn sm danger" data-act="tlDel" data-id="${e.id}" aria-label="Delete line">✕</button></td></tr>`)}</tbody>
+    <tfoot><tr><td></td><td colspan="5"><b>Total</b></td><td></td><td class="num"><b>${fmtD(total)}</b></td><td colspan="3"></td></tr></tfoot></table></div>`
+    : html`<div class="card empty">No lines for these filters.${window._tlLatest && window._tlLatest < TL.from ? html`<br><button class="btn sm" style="margin-top:10px" data-act="tlLatest">Show the latest lines (${niceDate(window._tlLatest)})</button>` : ''}</div>`);
+}
+async function saveCell(el) {
+  const e = window._teamlog.find((x) => x.id === Number(el.dataset.id)); if (!e) return;
+  const f = el.dataset.cell, v = f === 'days' ? Number(el.value) : el.value.trim();
+  if (f === 'days' && !(v > 0 && v <= 1)) { toast('Days must be between 0.05 and 1', true); el.value = e.days; return; }
+  if (e[f] === v) return;
+  const body = { work_date: e.work_date, project_id: e.project_id, task_type_id: e.task_type_id, days: e.days, quantity: e.quantity, description: e.description, [f]: v };
+  if (await attempt(() => put('/entries/' + e.id, body), 'Saved')) { e[f] = v; if (f === 'days') drawSheet(); } else el.value = e[f];
+}
+document.addEventListener('change', (ev) => { if (ev.target.matches?.('input.cell')) saveCell(ev.target); });
+document.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' && ev.target.matches?.('input.cell')) ev.target.blur(); });
+document.addEventListener('input', (ev) => { if (ev.target.id === 'tlQ') { TL.q = ev.target.value; clearTimeout(TL._t); TL._t = setTimeout(drawSheet, 150); } });
 
 // ---------- DASHBOARD ----------
 const D = { days: window.DEMO?.real ? 180 : 30, project: null };
@@ -753,6 +784,9 @@ const actions = {
       fld('days', 'Days (0.05 – 1)', { type: 'number', step: '0.05', required: true }), fld('quantity', 'Quantity (optional)', { type: 'number' }), fld('description', 'Task description')], values: e });
     if (v && await attempt(() => put('/entries/' + e.id, { ...v, quantity: v.quantity === '' ? null : Number(v.quantity) }), 'Saved')) viewTeamLog();
   },
+  tlSort: (el) => { const k = el.dataset.k; TL.dir = TL.sort === k ? -TL.dir : k === 'date' || k === 'days' ? -1 : 1; TL.sort = k; drawSheet(); },
+  tlLatest: () => { TL.to = window._tlLatest; TL.from = addDays(TL.to, -13); viewTeamLog(); },
+  tlNew: () => { L.forUser = TL.user ? Number(TL.user) : null; L.people = null; L.date = today(); resetForm(); location.hash = 'log'; },
   tlDel: async (el) => { if (await ask('Delete this timesheet line?', { ok: 'Delete', danger: true }) && await attempt(() => del('/entries/' + el.dataset.id), 'Deleted')) viewTeamLog(); },
   userAdd: () => userForm(), userEdit: (el) => userForm(window._users.find((u) => u.id === Number(el.dataset.id))),
   projAdd: () => projectForm(), projEdit: (el) => projectForm(byId(catalog.projects, el.dataset.id)),

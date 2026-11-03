@@ -239,7 +239,8 @@ GET('/api/entries', ({ user, query }) => {
     const W = ['e.work_date BETWEEN ? AND ?'], P = [from, to];
     if (query.user_id) { W.push('e.user_id=?'); P.push(Number(query.user_id)); }
     if (query.project_id) { W.push('e.project_id=?'); P.push(Number(query.project_id)); }
-    return { entries: db.prepare(`${ENTRY_SELECT} WHERE ${W.join(' AND ')} ORDER BY e.work_date DESC, u.name, e.task_seq LIMIT 3000`).all(...P) };
+    return { entries: db.prepare(`${ENTRY_SELECT} WHERE ${W.join(' AND ')} ORDER BY e.work_date DESC, u.name, e.task_seq LIMIT 3000`).all(...P),
+      latest: db.prepare('SELECT MAX(work_date) d FROM entries').get().d };
   }
   const uid = query.user_id ? Number(query.user_id) : user.id;
   canViewUser(user, uid);
