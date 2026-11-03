@@ -260,8 +260,9 @@ function entryFields(body) {
   return { work_date, project_id, task_type_id, scope_id, days, quantity: qty || null, description: str(body.description, 'description', { max: 1000 }) };
 }
 POST('/api/entries', ({ user, body }) => {
+  if (user.role === 'admin') throw forbidden('The admin does not log time — use the Team log to correct lines');
   const f = entryFields(body);
-  const uid = body.user_id && user.role === 'admin' ? Number(body.user_id) : user.id;
+  const uid = user.id;
   const seq = db.prepare('SELECT COALESCE(MAX(task_seq),0)+1 n FROM entries WHERE user_id=? AND work_date=?').get(uid, f.work_date).n;
   const r = db.prepare('INSERT INTO entries (user_id,work_date,task_seq,project_id,task_type_id,scope_id,days,quantity,description) VALUES (?,?,?,?,?,?,?,?,?)')
     .run(uid, f.work_date, seq, f.project_id, f.task_type_id, f.scope_id, f.days, f.quantity, f.description);
@@ -286,8 +287,7 @@ PUT('/api/entries/:id', ({ user, body, params }) => {
 });
 DEL('/api/entries/:id', ({ user, params }) => { ownEntry(user, params.id); db.prepare('DELETE FROM entries WHERE id=?').run(params.id); return { ok: true }; });
 
-// admin may load suggestions for the person they are logging for
-GET('/api/suggest', ({ user, query }) => suggest(user.role === 'admin' && query.user_id ? Number(query.user_id) : user.id, {
+GET('/api/suggest', ({ user, query }) => suggest(user.id, {
   projectId: query.project_id ? Number(query.project_id) : null,
   taskTypeId: query.task_type_id ? Number(query.task_type_id) : null,
   text: query.text || '', date: query.date && isDate(query.date) ? query.date : undefined,
