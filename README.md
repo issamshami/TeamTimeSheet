@@ -2,7 +2,7 @@
 
 Fast, mobile-friendly timesheet that replaces the team Excel sheet — with learning suggestions,
 automatic email reminders, a weekly "who hasn't filled" report, productivity analytics, an admin/leader
-dashboard and career-growth tracking. Node 22.5+; dependencies: `nodemailer`, `read-excel-file`.
+dashboard and career-growth tracking. Node 22.5+; dependencies: `nodemailer`, `write-excel-file`.
 
 ## Run it
 ```bash
@@ -11,10 +11,11 @@ npm start                      # http://localhost:3000
 ```
 First start creates `admin` and prints a random password (or set `ADMIN_PASSWORD`).
 
-**Load your real data:** sign in → **Setup → Import from Excel** → choose the team workbook
-(sheets *Picklist* and *Task Management*) → *Preview* → *Import*. It creates the picklists, the team
-members with their emails, and the full history. Safe to repeat. Download the generated logins CSV and
-share each person's password privately (people can change it under *Password*).
+**Getting started:** sign in as admin, then
+1. *Setup* → check the task items, scopes and career levels; add your projects (name + scope).
+2. *Team* → *Add person* for each member: name, username, work email (for reminders), start date, access
+   (member / team leader) and *Reports to*. Give each person their initial password privately.
+3. *Emails* → set your email for the weekly report and connect SMTP (below).
 
 Try with fake data instead: `DB_PATH=data/demo.db ADMIN_PASSWORD=admin123 npm run seed:demo && DB_PATH=data/demo.db ADMIN_PASSWORD=admin123 npm start`
 
@@ -44,8 +45,14 @@ APP_URL=https://timesheet.yourcompany.com
 Use a dedicated mailbox. Your IT admin must allow *SMTP AUTH* for it (Exchange admin → mailbox → Manage email apps),
 or send via your company's relay. Then use **Emails → Send test email**.
 
+## Export (Export tab — admin and team leaders)
+Pick a period (or a preset: this week, last month, …), Excel or CSV, and what to include:
+timesheet lines (same columns as the old Excel by default — choose any extra columns such as hours, quantity,
+email), summaries by person / project / task item, a person × project table, and missing/incomplete days.
+Optionally limit to some people or projects. Leaders only export their own team.
+
 ## Roles
-member (own data) · leader (own team's dashboard/growth) · admin (everything).
+member (own data) · leader (own team's dashboard/growth/export; can *propose* projects) · admin (everything; approves projects).
 
 ## Planned: Odoo attendance
 The sheet counts days; attendance will be compared per person per day with Odoo clock-in hours and flagged

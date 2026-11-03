@@ -91,3 +91,5 @@ svg text{fill:var(--muted);font-size:10px}
 header.top .brand{white-space:nowrap}
 @media (max-width:520px){.hide-sm{display:none}header.top{padding:8px 12px}}
 .progress.warn>i{background:var(--warn)}
+.stickybar{position:sticky;bottom:calc(70px + env(safe-area-inset-bottom));z-index:5}
+@media (min-width:760px){.stickybar{bottom:12px}}

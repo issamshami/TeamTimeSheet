@@ -7,7 +7,7 @@ import { suggest } from './suggest.js';
 import { overview, productivity, visibleUserIds, goalLiveValue, goalProgress, addDays, iso } from './analytics.js';
 import { startScheduler, sendReminders, sendWeeklyReport, sendTest, localNow, reminderRecipients, weeklyReportData } from './notifications.js';
 import { smtpConfigured, sendMail } from './mailer.js';
-import { importWorkbook } from './importer.js';
+import { buildExport, LINE_COLUMNS, SHEETS } from './exporter.js';
 
 const PUBLIC = new URL('../public/', import.meta.url).pathname;
 const PORT = Number(process.env.PORT || 3000);
@@ -338,12 +338,22 @@ POST('/api/admin/notify', async ({ user, body }) => {
   throw bad('Unknown action');
 });
 GET('/api/admin/outbox/:id', ({ user, params }) => { requireRole(user, 'admin'); const r = db.prepare('SELECT * FROM outbox WHERE id=?').get(params.id); if (!r) throw notFound(); return r; });
-POST('/api/admin/import', async ({ user, body, query }) => {
-  requireRole(user, 'admin');
-  if (!Buffer.isBuffer(body) || body.length < 100) throw bad('Upload the .xlsx file');
-  try { return await importWorkbook(body, { dry: query.dry === '1' }); }
-  catch (e) { throw bad('Could not import: ' + e.message); }
-}, 'user', { raw: true });
+// ---------- export ----------
+GET('/api/export/options', ({ user }) => { requireRole(user, 'admin', 'leader');
+  return { columns: LINE_COLUMNS.map(({ key, label, def }) => ({ key, label, def })), sheets: SHEETS }; });
+GET('/api/export', async ({ user, query }) => {
+  requireRole(user, 'admin', 'leader');
+  const from = dateParam(query.from || '', 'from'), to = dateParam(query.to || '', 'to');
+  if (from > to) throw bad('"From" must be before "To"');
+  if ((Date.parse(to) - Date.parse(from)) / 86400000 > 3 * 366) throw bad('Please export at most 3 years at a time');
+  const list = (v) => String(v || '').split(',').map((x) => x.trim()).filter(Boolean);
+  const ids = (v) => list(v).map(Number).filter(Number.isInteger);
+  const format = query.format === 'csv' ? 'csv' : 'xlsx';
+  try {
+    const f = await buildExport(user, { from, to, format, columns: list(query.columns), sheets: list(query.sheets), userIds: ids(query.users), projectIds: ids(query.projects) });
+    return { __file: f };
+  } catch (e) { if (/Choose at least/.test(e.message)) throw bad(e.message); throw e; }
+});
 
 // ---------- career / growth ----------
 function growth(viewer, uid) {
@@ -439,10 +449,9 @@ POST('/api/users/:id/level', ({ user, params, body }) => {
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.json': 'application/json', '.png': 'image/png', '.webmanifest': 'application/manifest+json' };
 
 function parseCookies(h = '') { return Object.fromEntries(h.split(';').map((c) => c.trim().split('=')).filter((p) => p[0]).map(([k, ...v]) => [k, v.join('=')])); }
-async function readBody(req, { raw = false } = {}) {
-  const chunks = []; let size = 0; const max = raw ? 30e6 : 1e6;
-  for await (const c of req) { size += c.length; if (size > max) throw new HttpError(413, 'Too large'); chunks.push(c); }
-  if (raw) return Buffer.concat(chunks);
+async function readBody(req) {
+  const chunks = []; let size = 0;
+  for await (const c of req) { size += c.length; if (size > 1e6) throw new HttpError(413, 'Too large'); chunks.push(c); }
   if (!size) return {};
   try { return JSON.parse(Buffer.concat(chunks).toString()); } catch { throw bad('Invalid JSON'); }
 }
@@ -456,8 +465,13 @@ async function handleApi(req, res, url) {
   if (route_.auth === 'user' && !user) throw new HttpError(401, 'Please sign in');
   if (req.method !== 'GET' && req.headers['x-requested-with'] !== 'timesheet') throw forbidden('Bad request origin');
   const params = route_.re.exec(url.pathname).groups || {};
-  const body = ['POST', 'PUT', 'DELETE'].includes(req.method) ? await readBody(req, route_) : {};
+  const body = ['POST', 'PUT', 'DELETE'].includes(req.method) ? await readBody(req) : {};
   const out = await route_.handler({ req, res, user, token, params, body, query: Object.fromEntries(url.searchParams), ip: req.socket.remoteAddress });
+  if (out?.__file) {
+    const f = out.__file;
+    res.writeHead(200, { 'Content-Type': f.type, 'Content-Disposition': `attachment; filename="${f.name}"`, 'Content-Length': f.data.length, 'Cache-Control': 'no-store', 'X-Row-Count': String(f.rows) });
+    return res.end(f.data);
+  }
   res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
   res.end(JSON.stringify(out ?? { ok: true }));
 }

@@ -86,7 +86,7 @@ const byId = (arr, id) => arr.find((x) => x.id === Number(id));
 // ---------- shell ----------
 const NAV = [
   ['log', '＋', 'Log time', () => true], ['history', '☰', 'My entries', () => true], ['growth', '↗', 'My growth', () => true],
-  ['dash', '▦', 'Dashboard', isMgr], ['prod', '⏱', 'Speed', isMgr], ['team', '☻', 'Team', isMgr], ['projects', '◧', () => (isAdmin() && catalog.pending_proposals ? `Projects (${catalog.pending_proposals})` : 'Projects'), isMgr], ['emails', '✉', 'Emails', isAdmin], ['setup', '⚙', 'Setup', isAdmin],
+  ['dash', '▦', 'Dashboard', isMgr], ['prod', '⏱', 'Speed', isMgr], ['team', '☻', 'Team', isMgr], ['projects', '◧', () => (isAdmin() && catalog.pending_proposals ? `Projects (${catalog.pending_proposals})` : 'Projects'), isMgr], ['export', '⤓', 'Export', isMgr], ['emails', '✉', 'Emails', isAdmin], ['setup', '⚙', 'Setup', isAdmin],
 ];
 function shell(active, body) {
   mount($('#app'), html`<header class="top"><div class="brand"><img src="/icon.svg" alt=""> Team Timesheet</div>
@@ -398,6 +398,65 @@ async function viewProjects() {
   };
 }
 
+// ---------- EXPORT ----------
+const EX_KEY = 'ts-export-v1';
+const exLoad = () => { try { return JSON.parse(localStorage.getItem(EX_KEY)) || {}; } catch { return {}; } };
+const exSave = (v) => { try { localStorage.setItem(EX_KEY, JSON.stringify(v)); } catch {} };
+function presetRange(k) {
+  const t = today(), d = new Date(t + 'T12:00:00'), wd = d.getDay(), y = d.getFullYear(), m = d.getMonth();
+  const f = (x) => ymd(x);
+  if (k === 'week') return [addDays(t, -wd), t];
+  if (k === 'lastweek') return [addDays(t, -wd - 7), addDays(t, -wd - 1)];
+  if (k === 'month') return [f(new Date(y, m, 1)), t];
+  if (k === 'lastmonth') return [f(new Date(y, m - 1, 1)), f(new Date(y, m, 0))];
+  if (k === 'year') return [f(new Date(y, 0, 1)), t];
+  return [addDays(t, -29), t];
+}
+async function viewExport() {
+  shell('export', html`<div class="empty">Loading…</div>`);
+  const [opt, { users }] = await Promise.all([get('/export/options'), get('/users')]);
+  const saved = exLoad(), [df, dt] = presetRange('month');
+  const st = { from: df, to: dt, format: saved.format || 'xlsx', columns: saved.columns || opt.columns.filter((c) => c.def).map((c) => c.key),
+    sheets: saved.sheets || opt.sheets.filter((c) => c.def).map((c) => c.key), users: [], projects: [] };
+  const people = users.filter((u) => u.role !== 'admin' || u.id === me.id);
+  const projs = catalog.projects.filter((p) => !p.is_leave);
+  const chk = (group, key, label, on, disabled) => html`<label class="chip ${on ? 'on' : ''}" style="cursor:pointer;${disabled ? 'opacity:.45;pointer-events:none' : ''}"><input type="checkbox" data-g="${group}" value="${key}" ${on ? raw('checked') : ''} style="display:none">${label}</label>`;
+  const draw = () => {
+    const csv = st.format === 'csv';
+    mount($('#view'), html`<h1>Export</h1>
+      <div class="card"><h2>Period</h2>
+        <div class="chips" style="margin-bottom:10px">${[['week', 'This week'], ['lastweek', 'Last week'], ['month', 'This month'], ['lastmonth', 'Last month'], ['30', 'Last 30 days'], ['year', 'This year']].map(([k, l]) => html`<button class="chip" data-act="exPreset" data-k="${k}">${l}</button>`)}</div>
+        <div class="grid g2"><div><label class="f" for="exFrom">From</label><input type="date" id="exFrom" value="${st.from}"></div><div><label class="f" for="exTo">To</label><input type="date" id="exTo" value="${st.to}"></div></div></div>
+      <div class="card"><h2>Format</h2><div class="chips">${chk('format', 'xlsx', 'Excel (.xlsx) — several sheets', !csv)}${chk('format', 'csv', 'CSV — timesheet lines only', csv)}</div></div>
+      <div class="card"><div class="row sp"><h2>What to include</h2></div>
+        <div class="chips">${opt.sheets.map((x) => chk('sheets', x.key, x.label, csv ? x.key === 'lines' : st.sheets.includes(x.key), csv))}</div>
+        ${csv ? html`<p class="small muted">CSV holds one table, so it contains the timesheet lines only.</p>` : ''}</div>
+      <div class="card"><div class="row sp"><h2>Columns of the timesheet lines</h2><button class="btn sm ghost" data-act="exColsDefault">Same as the old Excel</button></div>
+        <div class="chips">${opt.columns.map((c) => chk('columns', c.key, c.label, st.columns.includes(c.key)))}</div></div>
+      <div class="grid g2">
+        <div class="card"><div class="row sp"><h2>People</h2><span class="small muted">${st.users.length ? `${st.users.length} selected` : 'everyone'}</span></div>
+          <div class="chips">${people.map((u) => chk('users', u.id, u.name, st.users.includes(u.id)))}</div></div>
+        <div class="card"><div class="row sp"><h2>Projects</h2><span class="small muted">${st.projects.length ? `${st.projects.length} selected` : 'all projects'}</span></div>
+          <div class="chips">${projs.map((p) => chk('projects', p.id, p.name, st.projects.includes(p.id)))}</div></div></div>
+      <div class="card stickybar"><div class="row sp"><span class="small muted">${niceDate(st.from)} → ${niceDate(st.to)} · ${csv ? 'CSV' : 'Excel'}</span>
+        <button class="btn primary" data-act="exGo" style="min-width:180px">⤓ Download</button></div></div>`);
+  };
+  window._ex = { st, draw, opt };
+  draw();
+}
+document.addEventListener('change', (e) => {
+  const x = window._ex; if (!x || !$('#exFrom')) return;
+  const t = e.target, st = x.st;
+  if (t.id === 'exFrom') st.from = t.value; else if (t.id === 'exTo') st.to = t.value;
+  else if (t.dataset.g) {
+    const g = t.dataset.g, v = g === 'users' || g === 'projects' ? Number(t.value) : t.value;
+    if (g === 'format') st.format = v;
+    else st[g] = t.checked ? [...new Set([...st[g], v])] : st[g].filter((k) => k !== v);
+    exSave({ format: st.format, columns: st.columns, sheets: st.sheets });
+    x.draw();
+  }
+});
+
 // ---------- EMAILS ----------
 const WD = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 async function viewEmails() {
@@ -443,26 +502,11 @@ async function viewSetup() {
   const list = (title, items, addAct, editAct, sub) => html`<div class="card"><div class="row sp"><h2>${title}</h2><button class="btn sm primary" data-act="${addAct}">+ Add</button></div>
     ${items.length ? items.map((i) => html`<div class="row sp" style="padding:8px 0;border-bottom:1px solid var(--line);${i.active === 0 ? 'opacity:.5' : ''}"><div>${i.name}<div class="small muted">${sub(i)}</div></div><button class="btn sm" data-act="${editAct}" data-id="${i.id}">Edit</button></div>`) : html`<div class="empty">None yet</div>`}</div>`;
   mount($('#view'), html`<h1>Setup</h1>
-    <div class="card"><h2>Import from Excel</h2><p class="muted small">Upload the team workbook (sheets <b>Picklist</b> and <b>Task Management</b>). It loads the picklists, team members with their emails, and all past timesheet lines so the app starts with history. Safe to repeat — lines already imported are skipped. You always get a preview first.</p>
-      <div class="row"><input type="file" id="xlsx" accept=".xlsx" style="max-width:340px"><button class="btn primary" data-act="importPreview">Preview import</button></div><div id="importOut"></div></div>
     <p class="muted">These lists feed the quick-pick buttons on the timesheet. Archive instead of deleting so history is kept.</p>
     ${list('Projects', catalog.projects, 'projAdd', 'projEdit', (p) => `default scope: ${byId(catalog.scopes, p.default_scope_id)?.name || '–'}${p.is_leave ? ' · leave' : ''}${p.active ? '' : ' · archived'}`)}
     ${list('Task items', catalog.task_types, 'taskAdd', 'taskEdit', (t) => `${t.track_qty ? `asks “how many ${t.unit_label}s?”` : 'time only'}${t.is_leave ? ' · leave' : ''}${t.active ? '' : ' · archived'}`)}
     ${list('Scopes', catalog.scopes, 'scopeAdd', 'scopeEdit', (s) => (s.active ? '' : 'archived'))}
     ${list('Career levels', catalog.levels.map((l) => ({ ...l, active: 1 })), 'lvlAdd', 'lvlEdit', (l) => `#${l.rank} · ${l.description}`)}`);
-}
-async function runImport(dry) {
-  const f = $('#xlsx')?.files[0]; if (!f) return toast('Choose the .xlsx file first', true);
-  const out = $('#importOut'); mount(out, html`<div class="empty">Reading workbook…</div>`);
-  const r = await attempt(() => api('POST', '/admin/import' + (dry ? '?dry=1' : ''), f, { type: 'application/octet-stream' }));
-  if (!r) return mount(out, '');
-  const e = r.entries, skipped = Object.entries(e.skipped).map(([k, v]) => `${v} × ${k}`).join(', ');
-  mount(out, html`<div class="card" style="margin-top:12px;box-shadow:none"><h3>${dry ? 'Preview — nothing saved yet' : '✓ Imported'}</h3>
-    <ul class="small"><li><b>${e.imported}</b> timesheet lines${e.first_date ? ` (${e.first_date} → ${e.last_date})` : ''}${e.duplicates ? `, ${e.duplicates} already present` : ''}${skipped ? `, skipped: ${skipped}` : ''}</li>
-    <li>People: <b>${r.members.created.length}</b> new${r.members.updated.length ? `, ${r.members.updated.length} updated` : ''}${r.members.without_email.length ? html` — <span style="color:var(--warn)">no email for ${r.members.without_email.join(', ')}</span>` : ''}</li>
-    <li>New projects: ${r.projects_created.join(', ') || 'none'}</li><li>New task items: ${r.task_items_created.join(', ') || 'none'}</li></ul>
-    ${dry ? html`<button class="btn primary" data-act="importGo">Import now</button>` : r.credentials.length ? html`<p class="small"><b>Sign-in details for the new people</b> — shown only now. Download and share them privately (they can change the password after signing in).</p><button class="btn primary" data-act="dlCreds">Download logins (CSV)</button>` : ''}</div>`);
-  window._creds = r.credentials;
 }
 
 // ---------- actions (delegated) ----------
@@ -507,6 +551,22 @@ const actions = {
     if (v && await attempt(() => post(`/proposals/${el.dataset.id}/reject`, v), 'Rejected')) viewProjects();
   },
   projAddHere: () => projectForm(null, viewProjects),
+  exPreset: (el) => { const x = window._ex; [x.st.from, x.st.to] = presetRange(el.dataset.k); x.draw(); },
+  exColsDefault: () => { const x = window._ex; x.st.columns = x.opt.columns.filter((c) => c.def).map((c) => c.key); exSave({ format: x.st.format, columns: x.st.columns, sheets: x.st.sheets }); x.draw(); },
+  exGo: async (el) => {
+    const st = window._ex.st;
+    if (!st.from || !st.to || st.from > st.to) return toast('Check the dates', true);
+    if (!st.columns.length && (st.format === 'csv' || st.sheets.includes('lines'))) return toast('Pick at least one column', true);
+    el.disabled = true; el.textContent = 'Preparing…';
+    try {
+      const r = await fetch('/api/export' + qs({ from: st.from, to: st.to, format: st.format, columns: st.columns.join(','), sheets: st.sheets.join(','), users: st.users.join(','), projects: st.projects.join(',') }), { credentials: 'same-origin' });
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || 'Export failed');
+      const name = (r.headers.get('Content-Disposition') || '').match(/filename="([^"]+)"/)?.[1] || 'timesheet-export';
+      const url = URL.createObjectURL(await r.blob());
+      Object.assign(document.createElement('a'), { href: url, download: name }).click(); setTimeout(() => URL.revokeObjectURL(url), 2000);
+      toast(`Downloaded ${name} — ${r.headers.get('X-Row-Count')} timesheet lines`);
+    } catch (e) { toast(e.message, true); } finally { el.disabled = false; el.textContent = '⤓ Download'; }
+  },
   userAdd: () => userForm(), userEdit: (el) => userForm(window._users.find((u) => u.id === Number(el.dataset.id))),
   projAdd: () => projectForm(), projEdit: (el) => projectForm(byId(catalog.projects, el.dataset.id)),
   taskAdd: () => taskForm(), taskEdit: (el) => taskForm(byId(catalog.task_types, el.dataset.id)),
@@ -529,14 +589,6 @@ const actions = {
   },
   viewMail: async (el, ev) => { ev.preventDefault(); const m = await get('/admin/outbox/' + el.dataset.id);
     infoDialog(m.subject, html`<div class="small muted">To: ${m.to_addr} · ${m.status}${m.error ? ' — ' + m.error : ''}</div><iframe sandbox style="width:100%;height:340px;border:1px solid var(--line);border-radius:10px;margin-top:8px;background:#fff" srcdoc="${m.html}"></iframe>`); },
-  // import
-  importPreview: () => runImport(true),
-  importGo: () => { if (confirm('Import into the live database now?')) runImport(false).then(() => loadCatalog()); },
-  dlCreds: () => {
-    const rows = [['name', 'username', 'email', 'password'], ...(window._creds || []).map((c) => [c.name, c.username, c.email, c.password])];
-    const url = URL.createObjectURL(new Blob([rows.map((r) => r.map((x) => `"${String(x).replace(/"/g, '""')}"`).join(',')).join('\n')], { type: 'text/csv' }));
-    Object.assign(document.createElement('a'), { href: url, download: 'timesheet-logins.csv' }).click(); URL.revokeObjectURL(url);
-  },
 };
 const scopeOpts = (none = '—') => [{ value: '', label: none }, ...catalog.scopes.filter((s) => s.active).map((s) => ({ value: s.id, label: s.name }))];
 async function projectForm(p, after = viewSetup) {
@@ -611,7 +663,7 @@ async function loadCatalog() { catalog = await get('/catalog'); }
 async function route() {
   if (!me) return renderLogin();
   const [, page = 'log', arg] = location.hash.split('/');
-  const guard = { dash: isMgr, prod: isMgr, team: isMgr, projects: isMgr, setup: isAdmin, emails: isAdmin };
+  const guard = { dash: isMgr, prod: isMgr, team: isMgr, projects: isMgr, export: isMgr, setup: isAdmin, emails: isAdmin };
   if (guard[page] && !guard[page]()) { location.hash = '#/log'; return; }
   try {
     if (page === 'log') await viewLog();
@@ -623,6 +675,7 @@ async function route() {
     else if (page === 'emails') await viewEmails();
     else if (page === 'setup') await viewSetup();
     else if (page === 'projects') await viewProjects();
+    else if (page === 'export') await viewExport();
     else location.hash = '#/log';
     if (page === 'log' && L._openEdit) { const id = L._openEdit; L._openEdit = null; const el = document.createElement('i'); el.dataset.id = id; actions.edit(el); }
     if (page !== 'log') scrollTo(0, 0);
