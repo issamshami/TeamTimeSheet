@@ -15,9 +15,9 @@ const minutesOf = (hhmm) => { const [h, m] = hhmm.split(':').map(Number); return
 const link = (s) => s.app_url || process.env.APP_URL || '';
 const fmtDate = (d) => new Date(d + 'T12:00:00Z').toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' });
 
-const shell = (title, body, s) => `<div style="font-family:Segoe UI,Arial,sans-serif;max-width:620px;margin:auto;color:#16211f">
-<h2 style="color:#0f766e;margin:0 0 12px">${esc(title)}</h2>${body}
-${link(s) ? `<p style="margin-top:20px"><a href="${esc(link(s))}" style="background:#0f766e;color:#fff;padding:12px 20px;border-radius:10px;text-decoration:none;display:inline-block">Open Timesheet</a></p>` : ''}
+const shell = (title, body, s) => `<div style="font-family:Segoe UI,Arial,sans-serif;max-width:620px;margin:auto;color:#1f1416">
+<h2 style="color:#c8102e;margin:0 0 12px">${esc(title)}</h2>${body}
+${link(s) ? `<p style="margin-top:20px"><a href="${esc(link(s))}" style="background:#c8102e;color:#fff;padding:12px 20px;border-radius:10px;text-decoration:none;display:inline-block">Open Timesheet</a></p>` : ''}
 <p style="color:#888;font-size:12px;margin-top:24px">Sent automatically by Team Timesheet.</p></div>`;
 
 /** Who still owes today's timesheet? */

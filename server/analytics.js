@@ -82,7 +82,9 @@ export function overview(viewer, from, to, { projectId } = {}) {
   const matrix = group('u.id user_id, u.name user, t.id task_type_id, t.name task_type', 'JOIN users u ON u.id=e.user_id JOIN task_types t ON t.id=e.task_type_id', 'u.id, t.id');
   const by_day = db.prepare(`SELECT work_date date, ROUND(SUM(days),2) days FROM entries e WHERE ${base} GROUP BY work_date ORDER BY work_date`).all(...P);
   const settings = getSettings();
-  const comp = compliance(ids, from, to, settings);
+  const localToday = new Intl.DateTimeFormat('en-CA', { timeZone: settings.timezone }).format(new Date());
+  const compTo = to >= localToday ? addDays(localToday, -1) : to; // today is still being filled in
+  const comp = from <= compTo ? compliance(ids, from, compTo, settings) : compliance(ids, from, from, settings).map((c) => ({ ...c, expected: 0, complete: 0, missing: [], partial: [] }));
   const lastEntry = db.prepare(`SELECT user_id, MAX(work_date) d FROM entries WHERE user_id IN (${L}) GROUP BY user_id`).all(...ids);
   const lm = new Map(lastEntry.map((r) => [r.user_id, r.d]));
   const people = comp.map((c) => ({ ...c, last_entry: lm.get(c.id) || null }));

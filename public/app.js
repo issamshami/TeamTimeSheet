@@ -68,6 +68,17 @@ function formDialog({ title, fields, values = {}, submit = 'Save', danger }) {
     dlg.showModal();
   });
 }
+function ask(message, { ok = 'OK', danger = false } = {}) {
+  return new Promise((resolve) => {
+    const dlg = $('#dlg');
+    mount(dlg, html`<form method="dialog"><p style="margin:0 0 16px;font-size:1.02rem">${message}</p><div class="row sp"><button class="btn" type="button" id="askNo">Cancel</button><button class="btn ${danger ? 'danger' : 'primary'}" type="submit" id="askYes">${ok}</button></div></form>`);
+    const done = (v) => { dlg.onclose = null; dlg.close(); resolve(v); };
+    $('#askNo').onclick = () => done(false);
+    $('form', dlg).onsubmit = (e) => { e.preventDefault(); done(true); };
+    dlg.onclose = () => resolve(false);
+    dlg.showModal(); $('#askYes').focus();
+  });
+}
 function infoDialog(title, bodyHtml) {
   const dlg = $('#dlg');
   mount(dlg, html`<form method="dialog"><h2>${title}</h2>${bodyHtml}<div class="row" style="justify-content:flex-end;margin-top:14px"><button class="btn primary" type="submit">Close</button></div></form>`);
@@ -75,8 +86,36 @@ function infoDialog(title, bodyHtml) {
 }
 async function attempt(fn, okMsg) { try { const r = await fn(); if (okMsg) toast(okMsg); return r ?? true; } catch (e) { if (e.message !== 'signed out') toast(e.message, true); return false; } }
 
+// ---------- theme ----------
+const THEME_KEY = 'ts-theme';
+const svg = (d) => `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
+const ICONS = {
+  auto: svg('<circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor"/>'),
+  light: svg('<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>'),
+  dark: svg('<path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/>'),
+  key: svg('<circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M17 6l3 3"/>'),
+  out: svg('<path d="M15 4h4v16h-4M10 8l-4 4 4 4M6 12h11"/>'),
+};
+const THEMES = { auto: [ICONS.auto, 'Theme: follows your device'], light: [ICONS.light, 'Theme: light'], dark: [ICONS.dark, 'Theme: dark'] };
+const getTheme = () => { try { return localStorage.getItem(THEME_KEY) || 'auto'; } catch { return 'auto'; } };
+function applyTheme(t) {
+  if (t === 'auto') document.documentElement.removeAttribute('data-theme'); else document.documentElement.setAttribute('data-theme', t);
+  const dark = t === 'dark' || (t === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches);
+  document.querySelector('meta[name=theme-color]')?.setAttribute('content', dark ? '#7a0b1d' : '#c8102e');
+  document.querySelectorAll('.theme-btn').forEach((b) => { b.innerHTML = THEMES[t][0]; b.title = THEMES[t][1]; b.setAttribute('aria-label', THEMES[t][1]); });
+}
+function cycleTheme() {
+  const order = ['auto', 'light', 'dark'], next = order[(order.indexOf(getTheme()) + 1) % 3];
+  try { localStorage.setItem(THEME_KEY, next); } catch {}
+  applyTheme(next); toast(THEMES[next][1]);
+}
+const themeBtn = () => html`<button class="btn sm theme-btn" data-act="theme" type="button" title="${THEMES[getTheme()][1]}" aria-label="${THEMES[getTheme()][1]}">${raw(THEMES[getTheme()][0])}</button>`;
+if (getTheme() !== 'auto') applyTheme(getTheme());
+
 // ---------- state ----------
 let me = null, catalog = { projects: [], task_types: [], scopes: [], levels: [], settings: {} };
+const ICON = window.DEMO?.icon || '/icon.svg';
+const demoStrip = () => (window.DEMO ? html`<div class="demo-strip">Preview with made-up sample data, saved only in this browser. <button type="button" data-act="demoReset">Reset sample data</button></div>` : '');
 const isMgr = () => me && (me.role === 'admin' || me.role === 'leader');
 const isAdmin = () => me?.role === 'admin';
 const activeProjects = () => catalog.projects.filter((p) => p.active && !p.is_leave);
@@ -92,18 +131,19 @@ const NAV = [
   ['dash', '▦', 'Dashboard', isMgr], ['prod', '⏱', 'Speed', isMgr], ['team', '☻', 'Team', isMgr], ['projects', '◧', () => (isAdmin() && catalog.pending_proposals ? `Projects (${catalog.pending_proposals})` : 'Projects'), isMgr], ['export', '⤓', 'Export', isMgr], ['emails', '✉', 'Emails', isAdmin], ['setup', '⚙', 'Setup', isAdmin],
 ];
 function shell(active, body) {
-  mount($('#app'), html`<header class="top"><div class="brand"><img src="/icon.svg" alt=""> Team Timesheet</div>
-    <div class="row small" style="flex-wrap:nowrap"><span class="muted hide-sm">${me.name}</span><button class="btn sm" data-act="pw">Password</button><button class="btn sm" data-act="logout">Sign out</button></div></header>
-    <nav class="bar">${NAV.filter((n) => n[3]()).map(([k, i, l]) => html`<a href="#/${k}" class="${k === active ? 'on' : ''}"><span class="i">${i}</span>${typeof l === 'function' ? l() : l}</a>`)}</nav>
+  mount($('#app'), html`${demoStrip()}<div class="topband"><header class="top"><div class="brand"><img src="${ICON}" alt=""> Team Timesheet</div>
+    <div class="row small" style="flex-wrap:nowrap"><span class="who hide-sm">${me.name}</span>${themeBtn()}<button class="btn sm icon-btn" data-act="pw" title="Change password" aria-label="Change password">${raw(ICONS.key)}<span class="hide-sm">Password</span></button><button class="btn sm icon-btn" data-act="logout" title="Sign out" aria-label="Sign out">${raw(ICONS.out)}<span class="hide-sm">Sign out</span></button></div></header></div>
+    <nav class="bar">${NAV.filter((n) => n[3]()).map(([k, i, l]) => html`<a href="#${k}" class="${k === active ? 'on' : ''}"><span class="i">${i}</span>${typeof l === 'function' ? l() : l}</a>`)}</nav>
     <main class="wrap" id="view">${body}</main>`);
 }
 
 // ---------- login ----------
 function renderLogin() {
-  mount($('#app'), html`<form class="login card" id="loginForm"><h1>Team Timesheet</h1>
+  mount($('#app'), html`${demoStrip()}<div class="login-wrap"><form class="login card" id="loginForm"><div class="theme-row">${themeBtn()}</div><h1><img src="${ICON}" alt=""> Team Timesheet</h1>
     <div class="field"><label class="f" for="u">Username or work email</label><input id="u" type="text" autocomplete="username" autocapitalize="none" required></div>
     <div class="field"><label class="f" for="p">Password</label><input id="p" type="password" autocomplete="current-password" required></div>
-    <div class="err-text" id="lerr"></div><button class="btn primary block" type="submit">Sign in</button></form>`);
+    <div class="err-text" id="lerr"></div><button class="btn primary block" type="submit">Sign in</button>
+    ${window.DEMO ? html`<div class="demo-logins"><div class="small muted">Preview with sample data — sign in as:</div>${window.DEMO.logins.map((l) => html`<button class="btn" type="button" data-act="demoLogin" data-u="${l.u}" data-p="${l.p}">${l.label}</button>`)}</div>` : ''}</form></div>`);
   $('#loginForm').onsubmit = async (e) => {
     e.preventDefault();
     try { await post('/login', { username: $('#u').value, password: $('#p').value }); await boot(); }
@@ -200,7 +240,7 @@ const logActions = {
     refreshLogParts().then(() => scrollTo({ top: 0, behavior: 'smooth' }));
   },
   delEntry: async (el) => {
-    if (!confirm('Delete this entry?')) return;
+    if (!(await ask('Delete this entry?', { ok: 'Delete', danger: true }))) return;
     if (await attempt(() => del('/entries/' + el.dataset.id), 'Deleted')) { if (L.editId == el.dataset.id) resetForm(); viewLog(); }
   },
   dayOff: async () => {
@@ -245,7 +285,7 @@ async function viewHistory() {
   mount($('#view'), html`<h1>My entries</h1><div class="card"><div class="row sp"><span class="muted">Last 30 days</span><b>${fmtD(work)} working days · ${Object.keys(days).length} days with entries</b></div></div>
     ${Object.keys(days).length ? Object.keys(days).sort().reverse().map((d) => { const t = +days[d].reduce((s, e) => s + e.days, 0).toFixed(2);
       return html`<div class="card"><div class="day-h" style="margin-top:0"><span>${niceDate(d)}</span><span><span class="tag ${t >= 0.99 ? 'good' : 'warn'}">${fmtD(t)} / 1</span></span></div>
-      ${days[d].map((e) => html`<div class="entry"><div class="t"><span class="tag">Task ${e.task_seq}</span> ${e.project} · ${e.task_type}${e.scope && e.scope !== 'None' ? html` <span class="muted small">(${e.scope})</span>` : ''}</div><div class="right"><b>${fmtD(e.days)}</b></div><div class="d">${e.description}</div><div class="right"><a class="btn sm" href="#/log" data-act="goEdit" data-date="${d}" data-id="${e.id}">Edit</a></div></div>`)}</div>`; })
+      ${days[d].map((e) => html`<div class="entry"><div class="t"><span class="tag">Task ${e.task_seq}</span> ${e.project} · ${e.task_type}${e.scope && e.scope !== 'None' ? html` <span class="muted small">(${e.scope})</span>` : ''}</div><div class="right"><b>${fmtD(e.days)}</b></div><div class="d">${e.description}</div><div class="right"><a class="btn sm" href="#log" data-act="goEdit" data-date="${d}" data-id="${e.id}">Edit</a></div></div>`)}</div>`; })
       : html`<div class="card empty">No entries yet — head to “Log time”.</div>`}`);
 }
 
@@ -270,7 +310,7 @@ async function viewGrowth(id) {
   window._growth = g;
   mount($('#view'), html`
     <div class="row sp"><div><h1 style="margin-bottom:2px">${g.user.name}</h1><div class="muted">${g.user.job_title || ''}${g.level ? ' · ' + g.level.name : ''}</div></div>
-      ${uid !== me.id ? html`<a class="btn sm" href="#/team">← Team</a>` : ''}</div>
+      ${uid !== me.id ? html`<a class="btn sm" href="#team">← Team</a>` : ''}</div>
     <div class="grid g4" style="margin:14px 0"><div class="kpi"><b>${fmtD(g.totals.days)}</b><span>working days logged</span></div><div class="kpi"><b>${g.totals.units}</b><span>units counted (drawings etc.)</span></div><div class="kpi"><b>${g.totals.active_days}</b><span>days with entries</span></div></div>
     <div class="card"><div class="row sp"><h2>Career path</h2>${admin ? html`<button class="btn sm" data-act="setLevel" data-uid="${uid}">Change level</button>` : ''}</div>
       <div class="ladder">${g.levels.map((l) => html`<div class="step ${l.id === g.level?.id ? 'cur' : l.rank < curRank ? 'done' : ''}"><div>${l.rank < curRank ? '✓ ' : ''}${l.name}</div><div class="small">${l.description}</div></div>`)}</div>
@@ -318,7 +358,7 @@ async function viewDash() {
       <div class="kpi"><b>${t.people}</b><span>people logging</span></div><div class="kpi"><b>${behind.length}</b><span>need follow-up</span></div></div>
     ${behind.length ? html`<div class="card" style="margin-top:14px;border-color:var(--warn)"><h2>⚠ Needs follow-up <span class="muted small">(workdays with nothing logged or less than 1 day)</span></h2>
       <div class="tscroll"><table><tr><th>Person</th><th class="right">Complete</th><th>Missing days</th><th>Partial days</th></tr>
-      ${behind.map((p) => html`<tr><td><a href="#/growth/${p.id}"><b>${p.name}</b></a>${p.email ? '' : html` <span class="tag warn">no email</span>`}</td><td class="right">${p.complete}/${p.expected}</td>
+      ${behind.map((p) => html`<tr><td><a href="#growth-${p.id}"><b>${p.name}</b></a>${p.email ? '' : html` <span class="tag warn">no email</span>`}</td><td class="right">${p.complete}/${p.expected}</td>
         <td>${p.missing.length ? html`<b>${p.missing.length}</b> <span class="small muted">— latest ${p.missing.slice(-3).map(shortDate).join(', ')}</span>` : '–'}</td>
         <td>${p.partial.length ? html`<b>${p.partial.length}</b> <span class="small muted">— latest ${p.partial.slice(-2).map((x) => `${shortDate(x.date)} (${fmtD(x.days)})`).join(', ')}</span>` : '–'}</td></tr>`)}</table></div></div>`
       : html`<div class="card" style="margin-top:14px"><b>✓ Everyone is up to date in this period.</b></div>`}
@@ -330,7 +370,7 @@ async function viewDash() {
       <div class="card"><h2>Days by scope</h2>${o.by_scope.length ? bars(o.by_scope, { label: (r) => r.name, value: (r) => r.days, text: (r) => fmtD(r.days) }) : ''}</div>
     </div>
     <div class="card"><h2>Who spends time on what <span class="muted small">(days)</span></h2><div class="tscroll"><table><tr><th>Person</th>${tasks.map((x) => html`<th class="right">${x.name}</th>`)}</tr>
-      ${people.map((p) => html`<tr><td>${p.name}</td>${tasks.map((x) => { const v = mx[`${p.id}|${x.id}`] || 0; return html`<td class="right" style="background:rgba(15,118,110,${(v / mmax) * 0.45})">${v ? fmtD(v) : ''}</td>`; })}</tr>`)}</table></div></div>`);
+      ${people.map((p) => html`<tr><td>${p.name}</td>${tasks.map((x) => { const v = mx[`${p.id}|${x.id}`] || 0; return html`<td class="right" style="background:color-mix(in srgb, var(--brand) ${Math.round((v / mmax) * 45)}%, transparent)">${v ? fmtD(v) : ''}</td>`; })}</tr>`)}</table></div></div>`);
 }
 
 // ---------- SPEED (productivity) ----------
@@ -369,8 +409,8 @@ async function viewTeam() {
   const admin = isAdmin();
   mount($('#view'), html`<div class="row sp"><h1>Team</h1>${admin ? html`<button class="btn primary" data-act="userAdd">+ Add person</button>` : ''}</div>
     <div class="card"><div class="tscroll"><table><tr><th>Name</th><th>Access</th><th>Level</th><th>Start date</th><th>Last entry</th><th class="right">Days (30d)</th><th></th></tr>
-    ${users.map((u) => html`<tr style="${u.active ? '' : 'opacity:.5'}"><td><a href="#/growth/${u.id}"><b>${u.name}</b></a><div class="small muted">${u.email || html`<span class="tag warn">no email</span>`}${u.team ? ' · ' + u.team : ''}</div></td><td><span class="tag">${u.role}</span></td><td>${u.level || '–'}</td>
-      <td class="nowrap small">${u.start_date || '–'}</td><td>${u.role === 'admin' ? '' : rel(u.last_entry)}</td><td class="right">${fmtD(u.days_30d)}</td><td class="right nowrap"><a class="btn sm" href="#/growth/${u.id}">Growth</a> ${admin ? html`<button class="btn sm" data-act="userEdit" data-id="${u.id}">Edit</button>` : ''}</td></tr>`)}</table></div></div>`);
+    ${users.map((u) => html`<tr style="${u.active ? '' : 'opacity:.5'}"><td><a href="#growth-${u.id}"><b>${u.name}</b></a><div class="small muted">${u.email || html`<span class="tag warn">no email</span>`}${u.team ? ' · ' + u.team : ''}</div></td><td><span class="tag">${u.role}</span></td><td>${u.level || '–'}</td>
+      <td class="nowrap small">${u.start_date || '–'}</td><td>${u.role === 'admin' ? '' : rel(u.last_entry)}</td><td class="right">${fmtD(u.days_30d)}</td><td class="right nowrap"><a class="btn sm" href="#growth-${u.id}">Growth</a> ${admin ? html`<button class="btn sm" data-act="userEdit" data-id="${u.id}">Edit</button>` : ''}</td></tr>`)}</table></div></div>`);
   window._users = users;
 }
 
@@ -397,7 +437,7 @@ async function viewProjects() {
         <div class="row" style="margin-top:12px"><button class="btn primary" type="submit">Send proposal</button></div></form>
         <div class="card"><h2>My proposals</h2>${proposals.length ? proposals.map((p) => row(p)) : html`<div class="empty">You haven't proposed any project yet.</div>`}</div>`}
     ${admin && decided.length ? html`<div class="card"><h2>Decided</h2>${decided.slice(0, 30).map((p) => row(p))}</div>` : ''}
-    ${catalog.my_project_ids ? html`<div class="card"><h2>Projects I lead</h2>${scopedProjects().length ? html`<div class="chips">${scopedProjects().map((p) => html`<a class="chip" href="#/dash/${p.id}">▦ ${p.name}</a>`)}</div><p class="small muted" style="margin-top:8px">Tap a project to open its team dashboard.</p>` : html`<div class="empty">No projects assigned to you yet — the admin assigns team leaders to projects.</div>`}</div>` : ''}
+    ${catalog.my_project_ids ? html`<div class="card"><h2>Projects I lead</h2>${scopedProjects().length ? html`<div class="chips">${scopedProjects().map((p) => html`<a class="chip" href="#dash-${p.id}">▦ ${p.name}</a>`)}</div><p class="small muted" style="margin-top:8px">Tap a project to open its team dashboard.</p>` : html`<div class="empty">No projects assigned to you yet — the admin assigns team leaders to projects.</div>`}</div>` : ''}
     <div class="card"><h2>Active projects</h2><div class="tscroll"><table><tr><th>Project</th><th>Scope</th><th>Team leader</th>${admin ? html`<th></th>` : ''}</tr>${catalog.projects.filter((p) => p.active && !p.is_leave).map((p) => html`<tr><td>${p.name}</td><td>${scopeName(p.default_scope_id)}</td><td>${p.leaders?.join(', ') || html`<span class="muted">–</span>`}</td>${admin ? html`<td class="right"><button class="btn sm" data-act="projEditHere" data-id="${p.id}">Edit</button></td>` : ''}</tr>`)}</table></div></div>`);
   const f = $('#propForm');
   if (f) f.onsubmit = async (e) => {
@@ -522,6 +562,9 @@ async function viewSetup() {
 const fld = (n, l, o = {}) => ({ name: n, label: l, ...o });
 const actions = {
   ...logActions,
+  theme: () => cycleTheme(),
+  demoLogin: async (el) => { $('#u').value = el.dataset.u; $('#p').value = el.dataset.p; $('#loginForm').requestSubmit(); },
+  demoReset: async () => { if (await ask('Reset all sample data to the starting state?', { ok: 'Reset', danger: true })) window.DEMO.reset(); },
   logout: async () => { await post('/logout'); me = null; renderLogin(); },
   pw: async () => {
     const v = await formDialog({ title: 'Change password', submit: 'Change', fields: [fld('current', 'Current password', { type: 'password', required: true, autocomplete: 'current-password' }), fld('next', 'New password (6+ characters)', { type: 'password', required: true, autocomplete: 'new-password' })] });
@@ -530,7 +573,7 @@ const actions = {
   goEdit: (el) => { L.date = el.dataset.date; L._openEdit = Number(el.dataset.id); },
   goalAdd: (el) => goalForm(Number(el.dataset.uid)),
   goalEdit: (el) => goalForm(Number(el.dataset.uid), window._growth.goals.find((g) => g.id === Number(el.dataset.id))),
-  goalDel: async (el) => { if (confirm('Delete this goal?') && await attempt(() => del('/goals/' + el.dataset.id), 'Deleted')) route(); },
+  goalDel: async (el) => { if (await ask('Delete this goal?', { ok: 'Delete', danger: true }) && await attempt(() => del('/goals/' + el.dataset.id), 'Deleted')) route(); },
   goalProgress: async (el) => {
     const v = await formDialog({ title: 'Update progress', fields: [fld('current_value', 'Current value', { type: 'number', step: 'any', required: true })], values: { current_value: el.dataset.cur } });
     if (v && await attempt(() => put('/goals/' + el.dataset.id, { current_value: Number(v.current_value) }), 'Updated')) route();
@@ -541,7 +584,7 @@ const actions = {
       fld('body', 'Note', { type: 'textarea', required: true }), fld('shared', 'Share with the employee', { type: 'checkbox', default: true })] });
     if (v && await attempt(() => post(`/users/${el.dataset.uid}/notes`, v), 'Added')) route();
   },
-  noteDel: async (el, ev) => { ev.preventDefault(); if (confirm('Delete note?') && await attempt(() => del('/notes/' + el.dataset.id))) route(); },
+  noteDel: async (el, ev) => { ev.preventDefault(); if (await ask('Delete this note?', { ok: 'Delete', danger: true }) && await attempt(() => del('/notes/' + el.dataset.id))) route(); },
   setLevel: async (el) => {
     const g = window._growth;
     const v = await formDialog({ title: 'Change level / promote', fields: [
@@ -567,6 +610,7 @@ const actions = {
     const st = window._ex.st;
     if (!st.from || !st.to || st.from > st.to) return toast('Check the dates', true);
     if (!st.columns.length && (st.format === 'csv' || st.sheets.includes('lines'))) return toast('Pick at least one column', true);
+    if (window.DEMO) return infoDialog('Export', html`<p>Downloads are switched off in this preview. In the real app this button downloads <b>${st.format === 'csv' ? 'a CSV file' : 'an Excel file'}</b> for ${niceDate(st.from)} → ${niceDate(st.to)} with: ${st.format === 'csv' ? 'timesheet lines' : window._ex.opt.sheets.filter((x) => st.sheets.includes(x.key)).map((x) => x.label.toLowerCase()).join(', ')}.</p>`);
     el.disabled = true; el.textContent = 'Preparing…';
     try {
       const r = await fetch('/api/export' + qs({ from: st.from, to: st.to, format: st.format, columns: st.columns.join(','), sheets: st.sheets.join(','), users: st.users.join(','), projects: st.projects.join(',') }), { credentials: 'same-origin' });
@@ -586,7 +630,7 @@ const actions = {
   notify: async (el) => {
     const a = el.dataset.a, dry = !!el.dataset.dry; let body = { action: a, dry };
     if (a === 'test') { const v = await formDialog({ title: 'Send a test email', submit: 'Send', fields: [fld('to', 'Send to', { type: 'email', required: true, default: (await get('/admin/settings')).settings.admin_email })] }); if (!v) return; body.to = v.to; }
-    else if (!dry && !confirm(a === 'reminder' ? 'Send the reminder email to everyone who still owes today?' : 'Send the weekly report to you now?')) return;
+    else if (!dry && !(await ask(a === 'reminder' ? 'Send the reminder email now to everyone who has not completed today?' : 'Send the weekly report to you now?', { ok: 'Send' }))) return;
     const r = await attempt(() => post('/admin/notify', body)); if (!r) return;
     if (a === 'reminder') infoDialog(dry ? 'Reminder preview' : 'Reminder sent', html`<p class="small">${dry ? 'These people would get the email now:' : `${r.sent} sent${r.failed ? `, ${r.failed} failed` : ''}${r.smtp === false || (!r.dry && r.sent === 0 && r.recipients.length) ? ' (email delivery not connected — recorded in the log only)' : ''}.`}</p>
       <ul class="small">${r.recipients.map((x) => html`<li>${x.name} <span class="muted">— ${x.email}, logged ${fmtD(x.logged)}/1</span></li>`)}</ul>
@@ -675,9 +719,10 @@ document.addEventListener('change', (e) => {
 async function loadCatalog() { catalog = await get('/catalog'); }
 async function route() {
   if (!me) return renderLogin();
-  const [, page = 'log', arg] = location.hash.split('/');
+  const h = location.hash.replace(/^#\/?/, '');
+  const [page = 'log', arg] = h.includes('/') ? h.split('/') : (h.match(/^([a-z]+)(?:-(\d+))?$/) || [, h || 'log']).slice(1);
   const guard = { dash: isMgr, prod: isMgr, team: isMgr, projects: isMgr, export: isMgr, setup: isAdmin, emails: isAdmin };
-  if (guard[page] && !guard[page]()) { location.hash = '#/log'; return; }
+  if (guard[page] && !guard[page]()) { location.hash = '#log'; return; }
   try {
     if (page === 'log') await viewLog();
     else if (page === 'history') await viewHistory();
@@ -689,7 +734,7 @@ async function route() {
     else if (page === 'setup') await viewSetup();
     else if (page === 'projects') await viewProjects();
     else if (page === 'export') await viewExport();
-    else location.hash = '#/log';
+    else location.hash = '#log';
     if (page === 'log' && L._openEdit) { const id = L._openEdit; L._openEdit = null; const el = document.createElement('i'); el.dataset.id = id; actions.edit(el); }
     if (page !== 'log') scrollTo(0, 0);
   } catch (e) { if (e.message !== 'signed out') mount($('#view') || $('#app'), html`<div class="card empty">${e.message}</div>`); }
@@ -699,7 +744,7 @@ window.addEventListener('hashchange', route);
 async function boot() {
   try { ({ user: me } = await get('/me')); await loadCatalog(); } catch { me = null; }
   if (!me) return renderLogin();
-  if (!location.hash) location.hash = '#/log';
+  if (!location.hash) location.hash = '#log';
   route();
 }
 boot();
