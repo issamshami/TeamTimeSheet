@@ -202,8 +202,6 @@ function drawLog() {
         <select id="projSel" style="margin-top:8px"><option value="">${top.length ? 'Other project…' : 'Choose project…'}</option>${projs.filter((p) => !top.includes(p)).map((p) => html`<option value="${p.id}">${p.name}</option>`)}</select></div>
       <div class="field"><label class="f">Task item</label>
         <div class="chips">${tasks.map((t) => html`<button class="chip ${t.id === L.task_type_id ? 'on' : ''}" data-act="pickTask" data-id="${t.id}">${t.name}</button>`)}</div></div>
-      <div class="field"><label class="f">Scope <span class="muted small">${L.scopeManual ? '' : '— filled from the project'}</span></label>
-        <div class="chips">${activeScopes().map((s) => html`<button class="chip ${s.id === L.scope_id ? 'on' : ''}" data-act="pickScope" data-id="${s.id}">${s.name}</button>`)}</div></div>
       <div class="field"><label class="f">Time spent <span class="muted small">(days)</span></label>
         <div class="chips">${chips.map((d) => html`<button class="chip ${L.days === d ? 'on' : ''}" data-act="pickDays" data-d="${d}">${d === remaining && d < 1 ? 'Rest of day · ' : ''}${fmtD(d)}<span class="pct">${fmtH(hrs(d))}</span></button>`)}</div>
         <div class="row" style="margin-top:8px"><input type="number" id="daysIn" inputmode="decimal" step="0.05" min="0.05" max="1" placeholder="or type, e.g. 0.3" value="${L.days ?? ''}" style="max-width:170px"><span class="muted small">${L.days ? `= ${fmtH(hrs(L.days))}` : ''}</span></div>
@@ -228,7 +226,6 @@ const logActions = {
   dayNext: () => { if (L.date < today()) { L.date = addDays(L.date, 1); resetForm(); viewLog(); } },
   pickProject: (el) => { L.project_id = Number(el.dataset.id); L.scopeManual = false; refreshLogParts(); },
   pickTask: (el) => { L.task_type_id = Number(el.dataset.id); if (!byId(catalog.task_types, L.task_type_id).track_qty) L.qty = ''; refreshLogParts(); },
-  pickScope: (el) => { L.scope_id = Number(el.dataset.id); L.scopeManual = true; drawLog(); },
   pickDays: (el) => { L.days = Number(el.dataset.d); drawLog(); },
   inc: () => { L.qty = Math.min(1000, (Number(L.qty) || 0) + 1); drawLog(); },
   dec: () => { L.qty = Math.max(0, (Number(L.qty) || 0) - 1) || ''; drawLog(); },
@@ -252,7 +249,8 @@ const logActions = {
     if (!L.project_id) return toast('Pick a project', true);
     if (!L.task_type_id) return toast('Pick a task item', true);
     if (!L.days) return toast('Choose the time spent', true);
-    const body = { work_date: L.date, project_id: L.project_id, task_type_id: L.task_type_id, scope_id: L.scope_id, days: L.days, quantity: L.qty === '' ? null : Number(L.qty), description: L.desc };
+    const body = { work_date: L.date, project_id: L.project_id, task_type_id: L.task_type_id, days: L.days, // scope always comes from the project
+      quantity: L.qty === '' ? null : Number(L.qty), description: L.desc };
     const was = L.editId;
     const r = await attempt(() => (was ? put('/entries/' + was, body) : post('/entries', body)));
     if (!r) return;
