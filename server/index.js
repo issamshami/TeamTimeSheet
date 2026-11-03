@@ -213,7 +213,7 @@ POST('/api/users', ({ user, body }) => {
   try {
     const r = db.prepare('INSERT INTO users (name,username,email,team,pass_hash,role,leader_id,job_title,level_id,start_date) VALUES (?,?,?,?,?,?,?,?,?,?)')
       .run(str(body.name, 'name', { required: true, max: 100 }), username, email, str(body.team, 'team', { max: 50 }), hashPassword(password), role,
-        body.leader_id ? Number(body.leader_id) : null, str(body.job_title, 'job title', { max: 100 }), body.level_id ? Number(body.level_id) : null, body.start_date || today());
+        body.leader_id ? Number(body.leader_id) : null, str(body.job_title, 'job title', { max: 100 }), body.level_id ? Number(body.level_id) : null, body.start_date ? dateParam(String(body.start_date), 'start date') : today());
     const id = Number(r.lastInsertRowid);
     if (body.level_id) db.prepare('INSERT INTO level_history (user_id,level_id,from_date) VALUES (?,?,?)').run(id, Number(body.level_id), body.start_date || today());
     return { id };
@@ -226,9 +226,10 @@ PUT('/api/users/:id', ({ user, body, params }) => {
   if (t.id === user.id && (role !== 'admin' || body.active === false)) throw bad("You can't demote or deactivate yourself");
   const email = str(body.email ?? t.email, 'email', { max: 150 }).toLowerCase();
   if (!emailOk(email)) throw bad('Email looks invalid');
+  const start = body.start_date ? dateParam(String(body.start_date), 'start date') : t.start_date;
   db.prepare('UPDATE users SET name=?,email=?,team=?,role=?,leader_id=?,job_title=?,start_date=?,active=? WHERE id=?')
     .run(str(body.name ?? t.name, 'name', { required: true, max: 100 }), email, str(body.team ?? t.team, 'team', { max: 50 }), role, body.leader_id ? Number(body.leader_id) : null,
-      str(body.job_title ?? t.job_title, 'job title', { max: 100 }), body.start_date || t.start_date, body.active === undefined ? t.active : body.active ? 1 : 0, t.id);
+      str(body.job_title ?? t.job_title, 'job title', { max: 100 }), start, body.active === undefined ? t.active : body.active ? 1 : 0, t.id);
   if (body.password) {
     if (String(body.password).length < 6) throw bad('Password must be at least 6 characters');
     db.prepare('UPDATE users SET pass_hash=? WHERE id=?').run(hashPassword(String(body.password)), t.id);

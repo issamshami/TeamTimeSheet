@@ -26,7 +26,7 @@ export function reminderRecipients(date, s = getSettings()) {
   const comp = compliance(ids, date, date, { ...s, workdays: '0,1,2,3,4,5,6' }); // check the given day regardless of weekday
   const total = db.prepare(`SELECT user_id, ROUND(SUM(days),2) d FROM entries WHERE work_date=? GROUP BY user_id`).all(date);
   const tm = new Map(total.map((r) => [r.user_id, r.d]));
-  const rows = comp.map((c) => ({ ...c, logged: tm.get(c.id) || 0, incomplete: c.complete === 0 }));
+  const rows = comp.filter((c) => c.expected > 0).map((c) => ({ ...c, logged: tm.get(c.id) || 0, incomplete: c.complete === 0 })); // not started yet = nothing expected
   const targets = s.reminder_only_incomplete === '1' ? rows.filter((r) => r.incomplete) : rows;
   return { date, recipients: targets.filter((r) => r.email), no_email: targets.filter((r) => !r.email).map((r) => r.name), already_done: rows.length - targets.length };
 }

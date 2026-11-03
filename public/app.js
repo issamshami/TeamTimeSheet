@@ -360,9 +360,9 @@ async function viewTeam() {
   const { users } = await get('/users');
   const admin = isAdmin();
   mount($('#view'), html`<div class="row sp"><h1>Team</h1>${admin ? html`<button class="btn primary" data-act="userAdd">+ Add person</button>` : ''}</div>
-    <div class="card"><div class="tscroll"><table><tr><th>Name</th><th>Access</th><th>Level</th><th>Last entry</th><th class="right">Days (30d)</th><th></th></tr>
+    <div class="card"><div class="tscroll"><table><tr><th>Name</th><th>Access</th><th>Level</th><th>Start date</th><th>Last entry</th><th class="right">Days (30d)</th><th></th></tr>
     ${users.map((u) => html`<tr style="${u.active ? '' : 'opacity:.5'}"><td><a href="#/growth/${u.id}"><b>${u.name}</b></a><div class="small muted">${u.email || html`<span class="tag warn">no email</span>`}${u.team ? ' · ' + u.team : ''}</div></td><td><span class="tag">${u.role}</span></td><td>${u.level || '–'}</td>
-      <td>${u.role === 'admin' ? '' : rel(u.last_entry)}</td><td class="right">${fmtD(u.days_30d)}</td><td class="right nowrap"><a class="btn sm" href="#/growth/${u.id}">Growth</a> ${admin ? html`<button class="btn sm" data-act="userEdit" data-id="${u.id}">Edit</button>` : ''}</td></tr>`)}</table></div></div>`);
+      <td class="nowrap small">${u.start_date || '–'}</td><td>${u.role === 'admin' ? '' : rel(u.last_entry)}</td><td class="right">${fmtD(u.days_30d)}</td><td class="right nowrap"><a class="btn sm" href="#/growth/${u.id}">Growth</a> ${admin ? html`<button class="btn sm" data-act="userEdit" data-id="${u.id}">Edit</button>` : ''}</td></tr>`)}</table></div></div>`);
   window._users = users;
 }
 
@@ -524,11 +524,12 @@ async function userForm(u) {
     fld('email', 'Work email (for reminders)', { type: 'email' }),
     fld('password', u ? 'Reset password (leave empty to keep)' : 'Initial password (6+)', { type: 'password', required: !u, autocomplete: 'new-password' }),
     fld('job_title', 'Job title'), fld('team', 'Team / department'),
+    fld('start_date', 'Start date', { type: 'date', help: 'Days before this date are never counted as missing — no reminders, no follow-up flags.' }),
     fld('role', 'Access', { type: 'select', options: [{ value: 'member', label: 'Team member' }, { value: 'leader', label: 'Team leader (sees own team)' }, { value: 'admin', label: 'Admin (sees everything)' }] }),
     fld('leader_id', 'Reports to', { type: 'select', options: [{ value: '', label: '— none —' }, ...leaders.filter((l) => l.id !== u?.id).map((l) => ({ value: l.id, label: l.name }))] })];
   if (!u) fields.push(fld('level_id', 'Starting level', { type: 'select', options: [{ value: '', label: '—' }, ...catalog.levels.map((l) => ({ value: l.id, label: l.name }))] }));
   if (u) fields.push(fld('active', 'Active (can sign in, gets reminders)', { type: 'checkbox' }));
-  const v = await formDialog({ title: u ? 'Edit person' : 'Add person', fields, values: u ? { ...u, leader_id: u.leader_id ?? '' } : { role: 'member', team: 'BIM' } });
+  const v = await formDialog({ title: u ? 'Edit person' : 'Add person', fields, values: u ? { ...u, leader_id: u.leader_id ?? '' } : { role: 'member', team: 'BIM', start_date: today() } });
   if (!v) return;
   if (await attempt(() => (u ? put('/users/' + u.id, v) : post('/users', v)), 'Saved')) viewTeam();
 }
