@@ -107,7 +107,13 @@ GET('/api/catalog', ({ user }) => {
 function setProjectLeaders(pid, raw) {
   if (raw === undefined) return;
   const ids = [...new Set((Array.isArray(raw) ? raw : String(raw).split(',')).map(Number).filter(Number.isInteger))];
-  for (const id of ids) if (!db.prepare("SELECT 1 FROM users WHERE id=? AND role='leader'").get(id)) throw bad('Only team leaders can be assigned to a project');
+  for (const id of ids) {
+    const u = db.prepare('SELECT role, active FROM users WHERE id=?').get(id);
+    if (!u || !u.active) throw bad('Unknown or inactive person');
+    if (u.role === 'admin') throw bad('The admin already sees every project');
+  }
+  // anyone picked as a project's leader becomes a team leader
+  ids.forEach((id) => db.prepare("UPDATE users SET role='leader' WHERE id=? AND role='member'").run(id));
   db.prepare('DELETE FROM project_leaders WHERE project_id=?').run(pid);
   const ins = db.prepare('INSERT INTO project_leaders (project_id,user_id) VALUES (?,?)');
   ids.forEach((u) => ins.run(pid, u));

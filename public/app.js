@@ -646,10 +646,12 @@ const actions = {
 };
 const scopeOpts = (none = '—') => [{ value: '', label: none }, ...catalog.scopes.filter((s) => s.active).map((s) => ({ value: s.id, label: s.name }))];
 async function projectForm(p, after = viewSetup) {
-  const leaders = (await get('/leaders')).leaders.filter((l) => l.role === 'leader');
+  // everyone can be picked; current team leaders first. Picking a team member makes them a team leader.
+  const people = (await get('/users')).users.filter((u) => u.active && u.role !== 'admin')
+    .sort((a, b) => (a.role === 'leader' ? 0 : 1) - (b.role === 'leader' ? 0 : 1) || a.name.localeCompare(b.name));
   const v = await formDialog({ title: p ? 'Edit project' : 'New project', fields: [fld('name', 'Project name', { required: true }), fld('code', 'Code (optional)'),
     fld('default_scope_id', 'Scope', { type: 'select', options: scopeOpts('— choose scope —'), help: 'Filled in automatically for everyone who logs time on this project.' }),
-    fld('leader_ids', 'Team leader(s) monitoring this project', { type: 'checks', options: leaders.map((l) => ({ value: l.id, label: l.name })), empty: 'No team leaders yet — set Access = Team leader on the Team page.', help: 'They see this project on their Dashboard, Speed and Export.' }), fld('is_leave', 'This is a leave / day-off item', { type: 'checkbox' }), ...(p ? [fld('active', 'Active (shown on timesheet)', { type: 'checkbox' })] : [])],
+    fld('leader_ids', 'Team leader(s) monitoring this project', { type: 'checks', options: people.map((u) => ({ value: u.id, label: u.role === 'leader' ? `${u.name} ★` : u.name })), empty: 'No people yet — add them on the Team page.', help: '★ = already a team leader. Picking anyone else makes them a team leader. Leaders see this project on their Dashboard, Speed and Export.' }), fld('is_leave', 'This is a leave / day-off item', { type: 'checkbox' }), ...(p ? [fld('active', 'Active (shown on timesheet)', { type: 'checkbox' })] : [])],
     values: p ? { ...p, default_scope_id: p.default_scope_id ?? '', active: !!p.active, is_leave: !!p.is_leave } : { leader_ids: [] } });
   if (v && await attempt(() => (p ? put('/projects/' + p.id, v) : post('/projects', v)), 'Saved')) after();
 }
