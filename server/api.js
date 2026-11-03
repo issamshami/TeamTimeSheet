@@ -1,5 +1,6 @@
 // All HTTP API routes. Transport-free: server/index.js (Node) and the browser demo both call dispatch().
 import { randomBytes } from 'node:crypto';
+import { b64uToBuf, bufToB64u, sha256, cbor, parseAuthData, coseToJwk, checkClientData, checkAuthData, verifyAssertion, importKey } from './webauthn.js';
 import { db, hashPassword, verifyPassword, seedIfEmpty, getSettings, setSettings, SETTING_DEFAULTS } from './db.js';
 import { suggest } from './suggest.js';
 import { overview, productivity, visibleUserIds, goalLiveValue, goalProgress, addDays, iso, peopleInScope, leaderProjectIds, entryScope, careerStats } from './analytics.js';
@@ -46,7 +47,7 @@ const range = (q) => {
 const emailOk = (e) => !e || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
 const publicUser = (u) => ({
   id: u.id, name: u.name, username: u.username, email: u.email, team: u.team, role: u.role, leader_id: u.leader_id,
-  job_title: u.job_title, level_id: u.level_id, start_date: u.start_date, active: !!u.active,
+  job_title: u.job_title, level_id: u.level_id, start_date: u.start_date, active: !!u.active, invited: !u.pass_hash,
 });
 const requireRole = (u, ...roles) => { if (!roles.includes(u.role)) throw forbidden(); };
 const canViewUser = (viewer, targetId) => { if (!visibleUserIds(viewer).includes(targetId)) throw forbidden(); };
@@ -58,20 +59,149 @@ const today = () => localNow(getSettings().timezone).date;
 
 // ---------- auth ----------
 const attempts = new Map();
-POST('/api/login', ({ body, res, ip }) => {
-  const username = str(body.username, 'username', { required: true }), key = ip + '|' + username.toLowerCase();
+const tooMany = (key, max = 10) => {
   const a = attempts.get(key) || { n: 0, t: Date.now() };
   if (Date.now() - a.t > 600000) { a.n = 0; a.t = Date.now(); }
-  if (a.n >= 10) throw new HttpError(429, 'Too many attempts, try again in a few minutes');
-  // allow signing in with the username or the work email
-  const u = db.prepare('SELECT * FROM users WHERE (username=? OR (email<>\'\' AND email=?)) AND active=1').get(username, username);
-  if (!u || !verifyPassword(String(body.password ?? ''), u.pass_hash)) {
-    a.n++; attempts.set(key, a); throw new HttpError(401, 'Wrong username or password');
-  }
-  attempts.delete(key);
+  attempts.set(key, a);
+  if (a.n >= max) throw new HttpError(429, 'Too many attempts, try again in a few minutes');
+  return a;
+};
+function startSession(res, u) {
   const token = randomBytes(32).toString('base64url');
   db.prepare('INSERT INTO sessions (token,user_id,expires_at) VALUES (?,?,?)').run(token, u.id, Date.now() + SESSION_DAYS * 86400000);
   res.setHeader('Set-Cookie', `sid=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${SESSION_DAYS * 86400}${process.env.COOKIE_SECURE === '1' ? '; Secure' : ''}`);
+}
+POST('/api/login', ({ body, res, ip }) => {
+  const username = str(body.username, 'username', { required: true }), key = ip + '|' + username.toLowerCase();
+  const a = tooMany(key);
+  // sign in with the work email (or the username)
+  const u = db.prepare('SELECT * FROM users WHERE (username=? OR (email<>\'\' AND email=?)) AND active=1').get(username, username.toLowerCase());
+  if (u && !u.pass_hash) throw new HttpError(403, 'Your account is not activated yet. Open the invitation email, or tap “Forgot password?” to get a new link.');
+  if (!u || !verifyPassword(String(body.password ?? ''), u.pass_hash)) { a.n++; throw new HttpError(401, 'Wrong email or password'); }
+  attempts.delete(key);
+  startSession(res, u);
+  return { user: publicUser(u) };
+}, 'none');
+
+// ----- invitations: the admin adds a person; they set their own password from an emailed link -----
+const hexHash = (t) => Buffer.from(sha256(String(t))).toString('hex');
+function makeInvite(userId, days = 7) {
+  const raw = randomBytes(24).toString('hex');
+  db.prepare('UPDATE users SET invite_hash=?, invite_expires=? WHERE id=?').run(hexHash(raw), Date.now() + days * 86400000, userId);
+  return raw;
+}
+function siteBase(body, headers = {}) {
+  const fromClient = /^https?:\/\/[^\s/]+(\/[^\s?#]*)?$/.test(String(body?.origin || '')) ? String(body.origin).replace(/\/+$/, '') : '';
+  const o = headers.origin, host = headers.host;
+  const sameOrigin = o && host && (() => { try { return new URL(o).host === host; } catch { return false; } })() ? o : '';
+  return (getSettings().app_url || '').replace(/\/+$/, '') || fromClient || sameOrigin;
+}
+async function sendInvite(u, raw, base, reset) {
+  const link = base ? `${base}/#join-${raw}` : '';
+  const first = escH(u.name.split(' ')[0]);
+  const res = await sendMail({ kind: 'invite', to: u.email, subject: reset ? 'Reset your Team Timesheet password' : 'Welcome to Team Timesheet — set your password',
+    html: mailBox(reset ? 'Reset your password' : 'Welcome to Team Timesheet',
+      `<p>Hi ${first},</p><p>${reset ? 'Use the button below to choose a new password.' : 'An account was created for you with this email address. Choose your own password to start logging your time.'}</p>
+       ${link ? `<p><a href="${escH(link)}" style="background:#c8102e;color:#fff;padding:12px 20px;border-radius:10px;text-decoration:none;display:inline-block">${reset ? 'Choose a new password' : 'Set my password'}</a></p><p style="font-size:12px;color:#777;word-break:break-all">${escH(link)}</p>` : '<p>Ask your admin for the sign-in link.</p>'}
+       <p style="font-size:13px;color:#777">The link works for 7 days. If you did not expect this email, ignore it.</p>`, { noButton: true }) });
+  return { link, token: raw, email_status: res.status };
+}
+GET('/api/invite', ({ query, ip }) => {
+  tooMany('inv|' + ip, 30).n++;
+  const u = db.prepare("SELECT name,email,pass_hash FROM users WHERE invite_hash=? AND invite_hash<>'' AND invite_expires>? AND active=1").get(hexHash(query.token || ''), Date.now());
+  if (!u) throw new HttpError(404, 'This link has expired or was already used. Ask your admin to send a new one, or tap “Forgot password?” on the sign-in page.');
+  return { name: u.name, email: u.email, reset: !!u.pass_hash };
+}, 'none');
+POST('/api/invite/accept', ({ body, res, ip }) => {
+  tooMany('inv|' + ip, 30).n++;
+  const u = db.prepare("SELECT * FROM users WHERE invite_hash=? AND invite_hash<>'' AND invite_expires>? AND active=1").get(hexHash(body.token || ''), Date.now());
+  if (!u) throw new HttpError(404, 'This link has expired or was already used. Ask your admin to send a new one.');
+  const pw = String(body.password ?? '');
+  if (pw.length < 8) throw bad('Choose a password of at least 8 characters');
+  db.prepare("UPDATE users SET pass_hash=?, invite_hash='', invite_expires=0 WHERE id=?").run(hashPassword(pw), u.id);
+  db.prepare('DELETE FROM sessions WHERE user_id=?').run(u.id);
+  startSession(res, u);
+  return { user: publicUser({ ...u, pass_hash: 'x' }) };
+}, 'none');
+// "Forgot password?" — always answers the same, so it cannot be used to discover who has an account
+POST('/api/forgot', async ({ body, ip, headers }) => {
+  tooMany('fg|' + ip, 8).n++;
+  const email = str(body.email, 'email', { required: true, max: 150 }).toLowerCase();
+  const u = db.prepare("SELECT * FROM users WHERE email=? AND email<>'' AND active=1").get(email);
+  if (u) await sendInvite(u, makeInvite(u.id, 2), siteBase(body, headers), !!u.pass_hash);
+  return { ok: true };
+}, 'none');
+
+// ----- passkeys (biometric sign-in) -----
+const challenges = new Map();
+function newChallenge(extra) {
+  const now = Date.now();
+  for (const [k, v] of challenges) if (v.exp < now) challenges.delete(k);
+  if (challenges.size > 500) throw new HttpError(429, 'Busy — try again in a moment');
+  const id = randomBytes(16).toString('hex'), challenge = bufToB64u(randomBytes(32));
+  challenges.set(id, { challenge, exp: now + 300000, ...extra });
+  return { id, challenge };
+}
+function takeChallenge(id, kind) {
+  const c = challenges.get(String(id)); challenges.delete(String(id));
+  if (!c || c.kind !== kind || c.exp < Date.now()) throw bad('This request expired — try again');
+  return c;
+}
+function waOrigin(headers = {}) {
+  const o = headers.origin, host = headers.host;
+  try { if (o && host && new URL(o).host === host) return new URL(o).origin; } catch { /* fall through */ }
+  try { if (getSettings().app_url) return new URL(getSettings().app_url).origin; } catch { /* fall through */ }
+  throw bad('Biometric sign-in needs a secure web address (https).');
+}
+GET('/api/webauthn/credentials', ({ user }) => ({ credentials: db.prepare('SELECT id,label,created_at,last_used FROM webauthn_credentials WHERE user_id=? ORDER BY created_at').all(user.id) }));
+DEL('/api/webauthn/credentials/:id', ({ user, params }) => { db.prepare('DELETE FROM webauthn_credentials WHERE id=? AND user_id=?').run(params.id, user.id); return { ok: true }; });
+POST('/api/webauthn/register/options', ({ user, headers }) => {
+  const origin = waOrigin(headers), rpId = new URL(origin).hostname;
+  const c = newChallenge({ kind: 'reg', userId: user.id, origin });
+  const existing = db.prepare('SELECT id FROM webauthn_credentials WHERE user_id=?').all(user.id);
+  return { challengeId: c.id, publicKey: {
+    challenge: c.challenge, rp: { name: 'Team Timesheet', id: rpId },
+    user: { id: bufToB64u(Buffer.from('u' + user.id)), name: user.email || user.username, displayName: user.name },
+    pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
+    authenticatorSelection: { authenticatorAttachment: 'platform', residentKey: 'required', requireResidentKey: true, userVerification: 'required' },
+    attestation: 'none', timeout: 60000, excludeCredentials: existing.map((e) => ({ type: 'public-key', id: e.id })) } };
+});
+POST('/api/webauthn/register/verify', ({ user, body }) => {
+  const c = takeChallenge(body.challengeId, 'reg');
+  if (c.userId !== user.id) throw forbidden();
+  try {
+    checkClientData(body.clientDataJSON, 'webauthn.create', c.challenge, c.origin);
+    const [att] = cbor(b64uToBuf(body.attestationObject));
+    const p = checkAuthData(att.get('authData'), new URL(c.origin).hostname);
+    if (!p.credentialId || !p.publicKey) throw new Error('The device did not return a key');
+    const { alg, jwk } = coseToJwk(p.publicKey);
+    importKey(jwk); // throws if the key is not usable
+    db.prepare('INSERT INTO webauthn_credentials (id,user_id,public_jwk,alg,sign_count,label) VALUES (?,?,?,?,?,?)')
+      .run(bufToB64u(p.credentialId), user.id, JSON.stringify(jwk), alg, p.signCount, str(body.label, 'label', { max: 40 }) || 'This device');
+  } catch (e) { throw bad(/UNIQUE/.test(e.message) ? 'This device is already enabled' : e.message); }
+  return { ok: true };
+});
+POST('/api/webauthn/login/options', ({ headers, ip }) => {
+  tooMany('wa|' + ip, 40).n++;
+  const origin = waOrigin(headers), c = newChallenge({ kind: 'auth', origin });
+  return { challengeId: c.id, publicKey: { challenge: c.challenge, rpId: new URL(origin).hostname, userVerification: 'required', timeout: 60000, allowCredentials: [] } };
+}, 'none');
+POST('/api/webauthn/login/verify', ({ body, res, ip }) => {
+  const a = tooMany('wa|' + ip, 40); a.n++;
+  const c = takeChallenge(body.challengeId, 'auth');
+  const fail = (m) => { throw new HttpError(401, m || 'Biometric sign-in failed. Use your email and password instead.'); };
+  const cred = db.prepare('SELECT * FROM webauthn_credentials WHERE id=?').get(String(body.id || ''));
+  if (!cred) fail('This device is not set up for biometric sign-in on this account. Sign in with your password, then enable it in Settings.');
+  const u = db.prepare("SELECT * FROM users WHERE id=? AND active=1 AND pass_hash<>''").get(cred.user_id);
+  if (!u) fail();
+  try {
+    checkClientData(body.clientDataJSON, 'webauthn.get', c.challenge, c.origin);
+    const ad = b64uToBuf(body.authenticatorData), p = checkAuthData(ad, new URL(c.origin).hostname);
+    if (!verifyAssertion(JSON.parse(cred.public_jwk), ad, b64uToBuf(body.clientDataJSON), b64uToBuf(body.signature))) throw new Error('Signature check failed');
+    if (p.signCount && cred.sign_count && p.signCount <= cred.sign_count) throw new Error('This device looks cloned and was refused');
+    db.prepare("UPDATE webauthn_credentials SET sign_count=?, last_used=datetime('now') WHERE id=?").run(p.signCount, cred.id);
+  } catch (e) { fail(e.message); }
+  startSession(res, u);
   return { user: publicUser(u) };
 }, 'none');
 POST('/api/logout', ({ res, token }) => {
@@ -160,7 +290,7 @@ PUT('/api/task_types/:id', ({ user, body, params }) => { requireRole(user, 'admi
 const PROPOSAL_SELECT = `SELECT pp.*, s.name scope, u.name proposed_by_name, d.name decided_by_name FROM project_proposals pp
   LEFT JOIN scopes s ON s.id=pp.scope_id JOIN users u ON u.id=pp.proposed_by LEFT JOIN users d ON d.id=pp.decided_by`;
 const escH = (x) => String(x ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-const mailBox = (title, body) => `<div style="font-family:Segoe UI,Arial,sans-serif;max-width:620px;margin:auto;color:#1f1416"><h2 style="color:#c8102e">${escH(title)}</h2>${body}${getSettings().app_url ? `<p><a href="${escH(getSettings().app_url)}/#projects" style="background:#c8102e;color:#fff;padding:12px 20px;border-radius:10px;text-decoration:none;display:inline-block">Open Projects</a></p>` : ''}</div>`;
+const mailBox = (title, body, o = {}) => `<div style="font-family:Segoe UI,Arial,sans-serif;max-width:620px;margin:auto;color:#1f1416"><h2 style="color:#c8102e">${escH(title)}</h2>${body}${getSettings().app_url && !o.noButton ? `<p><a href="${escH(getSettings().app_url)}/#projects" style="background:#c8102e;color:#fff;padding:12px 20px;border-radius:10px;text-decoration:none;display:inline-block">Open Projects</a></p>` : ''}</div>`;
 GET('/api/proposals', ({ user }) => {
   requireRole(user, 'admin', 'leader');
   const rows = user.role === 'admin'
@@ -305,40 +435,52 @@ GET('/api/users', ({ user }) => {
   return { users: rows.map((r) => ({ ...publicUser(r), level: r.level, last_entry: r.last_entry, days_30d: r.days_30d })) };
 });
 GET('/api/leaders', ({ user }) => { requireRole(user, 'admin'); return { leaders: db.prepare("SELECT id,name,role FROM users WHERE role IN ('leader','admin') AND active=1 ORDER BY name").all() }; });
-POST('/api/users', ({ user, body }) => {
+const uniqueUsername = (email, name) => {
+  let base = (email ? email.split('@')[0] : name.toLowerCase().split(' ')[0]).toLowerCase().replace(/[^a-z0-9._-]/g, '') || 'user', u = base, i = 2;
+  while (db.prepare('SELECT 1 FROM users WHERE username=?').get(u)) u = base + i++;
+  return u;
+};
+const emailTaken = (email, exceptId = 0) => db.prepare("SELECT 1 FROM users WHERE email=? AND email<>'' AND id<>?").get(email, exceptId);
+// Admin adds a person: name + work email (+ role etc.). The account exists immediately; the person chooses their own password.
+POST('/api/users', async ({ user, body, headers }) => {
   requireRole(user, 'admin');
-  const username = str(body.username, 'username', { required: true, max: 50 });
-  const password = str(body.password, 'password', { required: true, max: 200 });
-  if (password.length < 6) throw bad('Password must be at least 6 characters');
-  const email = str(body.email, 'email', { max: 150 }).toLowerCase();
+  const name = str(body.name, 'name', { required: true, max: 100 });
+  const email = str(body.email, 'email', { required: true, max: 150 }).toLowerCase();
   if (!emailOk(email)) throw bad('Email looks invalid');
+  if (emailTaken(email)) throw bad('Someone already has this email');
   const role = ['admin', 'leader', 'member'].includes(body.role) ? body.role : 'member';
-  try {
-    const r = db.prepare('INSERT INTO users (name,username,email,team,pass_hash,role,leader_id,job_title,level_id,start_date) VALUES (?,?,?,?,?,?,?,?,?,?)')
-      .run(str(body.name, 'name', { required: true, max: 100 }), username, email, str(body.team, 'team', { max: 50 }), hashPassword(password), role,
-        body.leader_id ? Number(body.leader_id) : null, str(body.job_title, 'job title', { max: 100 }), body.level_id ? Number(body.level_id) : null, body.start_date ? dateParam(String(body.start_date), 'start date') : today());
-    const id = Number(r.lastInsertRowid);
-    if (body.level_id) db.prepare('INSERT INTO level_history (user_id,level_id,from_date) VALUES (?,?,?)').run(id, Number(body.level_id), body.start_date || today());
-    return { id };
-  } catch (e) { if (/UNIQUE/.test(e.message)) throw bad('Username already taken'); throw e; }
+  const id = Number(db.prepare("INSERT INTO users (name,username,email,team,pass_hash,role,leader_id,job_title,level_id,start_date) VALUES (?,?,?,?,'',?,?,?,?,?)")
+    .run(name, uniqueUsername(email, name), email, str(body.team, 'team', { max: 50 }), role, body.leader_id ? Number(body.leader_id) : null,
+      str(body.job_title, 'job title', { max: 100 }), body.level_id ? Number(body.level_id) : null, body.start_date ? dateParam(String(body.start_date), 'start date') : today()).lastInsertRowid);
+  if (body.level_id) db.prepare('INSERT INTO level_history (user_id,level_id,from_date) VALUES (?,?,?)').run(id, Number(body.level_id), body.start_date || today());
+  const inv = await sendInvite(getUser(id), makeInvite(id), siteBase(body, headers), false);
+  return { id, link: inv.link, token: inv.token, email_status: inv.email_status };
 });
-PUT('/api/users/:id', ({ user, body, params }) => {
+// edit name, email, role (and the rest of the profile)
+PUT('/api/users/:id', async ({ user, body, params, headers }) => {
   requireRole(user, 'admin');
   const t = getUser(params.id);
   const role = ['admin', 'leader', 'member'].includes(body.role) ? body.role : t.role;
   if (t.id === user.id && (role !== 'admin' || body.active === false)) throw bad("You can't demote or deactivate yourself");
-  const email = str(body.email ?? t.email, 'email', { max: 150 }).toLowerCase();
+  const email = str(body.email ?? t.email, 'email', { required: true, max: 150 }).toLowerCase();
   if (!emailOk(email)) throw bad('Email looks invalid');
+  if (emailTaken(email, t.id)) throw bad('Someone else already has this email');
   const start = body.start_date ? dateParam(String(body.start_date), 'start date') : t.start_date;
   db.prepare('UPDATE users SET name=?,email=?,team=?,role=?,leader_id=?,job_title=?,start_date=?,active=? WHERE id=?')
     .run(str(body.name ?? t.name, 'name', { required: true, max: 100 }), email, str(body.team ?? t.team, 'team', { max: 50 }), role, body.leader_id ? Number(body.leader_id) : null,
       str(body.job_title ?? t.job_title, 'job title', { max: 100 }), start, body.active === undefined ? t.active : body.active ? 1 : 0, t.id);
-  if (body.password) {
-    if (String(body.password).length < 6) throw bad('Password must be at least 6 characters');
-    db.prepare('UPDATE users SET pass_hash=? WHERE id=?').run(hashPassword(String(body.password)), t.id);
-    db.prepare('DELETE FROM sessions WHERE user_id=?').run(t.id);
-  }
-  return { ok: true };
+  const out = { ok: true };
+  if (email !== t.email && !t.pass_hash) Object.assign(out, await sendInvite(getUser(t.id), makeInvite(t.id), siteBase(body, headers), false)); // not activated yet: the link goes to the new email
+  if (body.active === false) db.prepare('DELETE FROM sessions WHERE user_id=?').run(t.id);
+  return out;
+});
+// send (or re-send) the sign-in link: first-time invitation, or a password reset for an active person
+POST('/api/users/:id/invite', async ({ user, params, body, headers }) => {
+  requireRole(user, 'admin');
+  const t = getUser(params.id);
+  if (!t.email) throw bad('Add this person\'s email first');
+  const inv = await sendInvite(t, makeInvite(t.id), siteBase(body, headers), !!t.pass_hash);
+  return inv;
 });
 
 // ---------- dashboard ----------
@@ -558,7 +700,7 @@ export async function dispatch({ method, pathname, searchParams, headers = {}, r
     const params = route_.re.exec(pathname).groups || {};
     let body = {};
     if (['POST', 'PUT', 'DELETE'].includes(method) && rawBody) { try { body = JSON.parse(rawBody); } catch { throw bad('Invalid JSON'); } }
-    const result = await route_.handler({ res, user, token, params, body, query: Object.fromEntries(searchParams), ip });
+    const result = await route_.handler({ res, user, token, params, body, headers, query: Object.fromEntries(searchParams), ip });
     if (result?.__file) {
       const f = result.__file;
       return { status: 200, headers: { ...out, 'Content-Type': f.type, 'Content-Disposition': `attachment; filename="${f.name}"`, 'Content-Length': String(f.data.length), 'Cache-Control': 'no-store', 'X-Row-Count': String(f.rows) }, body: f.data };

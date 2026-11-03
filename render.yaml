@@ -1,0 +1,30 @@
+# One-click deploy on Render: dashboard.render.com → New → Blueprint → pick this repository.
+# A paid instance is needed because the database lives on a persistent disk (/data).
+services:
+  - type: web
+    name: team-timesheet
+    runtime: docker
+    plan: starter
+    healthCheckPath: /healthz
+    autoDeploy: true
+    disk:
+      name: timesheet-data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: ADMIN_PASSWORD      # the password for the first sign-in as "admin" (change it afterwards)
+        sync: false
+      - key: ADMIN_EMAIL         # your work email; the weekly report and alerts go here
+        sync: false
+      - key: APP_URL             # the address Render gives you, e.g. https://team-timesheet.onrender.com
+        sync: false
+      - key: SMTP_HOST
+        value: smtp.office365.com
+      - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_USER           # the mailbox that sends reminders and invitations
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      - key: MAIL_FROM
+        sync: false

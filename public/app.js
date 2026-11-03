@@ -31,7 +31,7 @@ async function api(method, path, body, opts = {}) {
     body: body === undefined ? undefined : opts.type ? body : JSON.stringify(body), credentials: 'same-origin',
   });
   const data = await r.json().catch(() => ({}));
-  if (r.status === 401 && path !== '/login') { me = null; renderLogin(); throw new Error('signed out'); }
+  if (r.status === 401 && !/^\/(login|webauthn\/login|invite|forgot)/.test(path)) { me = null; renderLogin(); throw new Error('signed out'); }
   if (!r.ok) throw new Error(data.error || 'Something went wrong');
   return data;
 }
@@ -95,6 +95,7 @@ const ICONS = {
   dark: svg('<path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/>'),
   key: svg('<circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M17 6l3 3"/>'),
   out: svg('<path d="M15 4h4v16h-4M10 8l-4 4 4 4M6 12h11"/>'),
+  finger: svg('<path d="M12 11v3a7 7 0 0 1-1.5 4.3M8 14a4 4 0 0 1 8 0c0 2-.4 3.6-1.2 5M5 12a7 7 0 0 1 14 0c0 1.5-.1 2.7-.4 3.8M3.3 9.6A9.5 9.5 0 0 1 12 4.5a9.5 9.5 0 0 1 8.7 5.1M12 4.5V3"/>'),
 };
 const THEMES = { auto: [ICONS.auto, 'Theme: follows your device'], light: [ICONS.light, 'Theme: light'], dark: [ICONS.dark, 'Theme: dark'] };
 const getTheme = () => { try { return localStorage.getItem(THEME_KEY) || 'auto'; } catch { return 'auto'; } };
@@ -165,17 +166,60 @@ const home = () => '#dash';
 const setupTabs = (cur) => html`<div class="tabs" role="tablist">${[['setup', 'Projects'], ['team', 'Team & roles'], ['lists', 'Task items & lists'], ['emails', 'Emails & reminders']].map(([k, l]) => html`<a role="tab" href="#${k}" class="tab ${k === cur ? 'on' : ''}" ${k === cur ? raw('aria-selected="true"') : ''}>${l}${k === 'setup' && catalog.pending_proposals ? html` <span class="badge">${catalog.pending_proposals}</span>` : ''}</a>`)}</div>`;
 const withTabs = (cur) => { if (isAdmin()) $('#view').insertAdjacentHTML('afterbegin', setupTabs(cur).s); };
 
+// ---------- passkeys (biometric sign-in) ----------
+const u2b = (str) => Uint8Array.from(atob(str.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0));
+const b2u = (buf) => { let t = ''; new Uint8Array(buf).forEach((x) => (t += String.fromCharCode(x))); return btoa(t).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); };
+const bioSupported = () => !window.DEMO && !!window.PublicKeyCredential && !!navigator.credentials && window.isSecureContext;
+const waMessage = (e) => (e?.name === 'NotAllowedError' ? 'Cancelled — nothing was changed.' : e?.name === 'InvalidStateError' ? 'This device is already enabled.' : e?.message || 'Biometric sign-in failed');
+async function bioEnable(label) {
+  const o = await post('/webauthn/register/options'), pk = o.publicKey;
+  pk.challenge = u2b(pk.challenge); pk.user.id = u2b(pk.user.id); pk.excludeCredentials = (pk.excludeCredentials || []).map((c) => ({ ...c, id: u2b(c.id) }));
+  const cred = await navigator.credentials.create({ publicKey: pk });
+  await post('/webauthn/register/verify', { challengeId: o.challengeId, label, id: cred.id, clientDataJSON: b2u(cred.response.clientDataJSON), attestationObject: b2u(cred.response.attestationObject) });
+}
+async function bioLogin() {
+  const o = await post('/webauthn/login/options'), pk = o.publicKey;
+  pk.challenge = u2b(pk.challenge);
+  const cred = await navigator.credentials.get({ publicKey: pk });
+  const r = cred.response;
+  await post('/webauthn/login/verify', { challengeId: o.challengeId, id: cred.id, clientDataJSON: b2u(r.clientDataJSON), authenticatorData: b2u(r.authenticatorData), signature: b2u(r.signature), userHandle: r.userHandle ? b2u(r.userHandle) : null });
+}
+const siteOrigin = () => location.origin + location.pathname.replace(/\/index\.html$/, '').replace(/\/+$/, '');
+
 // ---------- login ----------
 function renderLogin() {
   mount($('#app'), html`${demoStrip()}<div class="login-wrap"><form class="login card" id="loginForm"><div class="theme-row">${themeBtn()}</div><h1><img src="${ICON}" alt=""> Team Timesheet</h1>
-    <div class="field"><label class="f" for="u">Username or work email</label><input id="u" type="text" autocomplete="username" autocapitalize="none" required></div>
+    ${bioSupported() ? html`<button class="btn block bio-btn" type="button" data-act="bioLogin">${raw(ICONS.finger)} Sign in with fingerprint or face</button><div class="or"><span>or use your email</span></div>` : ''}
+    <div class="field"><label class="f" for="u">Work email</label><input id="u" type="text" inputmode="email" autocomplete="username" autocapitalize="none" required></div>
     <div class="field"><label class="f" for="p">Password</label><input id="p" type="password" autocomplete="current-password" required></div>
-    <div class="err-text" id="lerr"></div><button class="btn primary block" type="submit">Sign in</button>
+    <div class="err-text" id="lerr" role="alert"></div><button class="btn primary block" type="submit">Sign in</button>
+    <div class="row sp" style="margin-top:12px"><button class="linklike" type="button" data-act="forgot">Forgot password?</button><span class="small muted">First time? Use the link in your invitation email.</span></div>
     ${window.DEMO ? html`<div class="demo-logins"><div class="small muted">Preview — sign in as:</div>${window.DEMO.logins.map((l) => html`<button class="btn" type="button" data-act="demoLogin" data-u="${l.u}" data-p="${l.p}">${l.label}</button>`)}</div>` : ''}</form></div>`);
   $('#loginForm').onsubmit = async (e) => {
     e.preventDefault();
-    try { await post('/login', { username: $('#u').value, password: $('#p').value }); await boot(); }
+    try { await post('/login', { username: $('#u').value.trim(), password: $('#p').value }); await boot(); }
     catch (er) { $('#lerr').textContent = er.message; }
+  };
+}
+// first sign-in: the person chooses their own password from the emailed link  (#join-<code>)
+async function renderJoin(token) {
+  mount($('#app'), html`${demoStrip()}<div class="login-wrap"><div class="login card"><div class="theme-row">${themeBtn()}</div><h1><img src="${ICON}" alt=""> Team Timesheet</h1><div class="empty">Checking your link…</div></div></div>`);
+  let info;
+  try { info = await get('/invite?token=' + token); }
+  catch (e) { return mount($('#app'), html`${demoStrip()}<div class="login-wrap"><div class="login card"><div class="theme-row">${themeBtn()}</div><h1><img src="${ICON}" alt=""> Team Timesheet</h1><p>${e.message}</p><a class="btn primary block" href="#log" data-act="toLogin">Go to sign in</a></div></div>`); }
+  mount($('#app'), html`${demoStrip()}<div class="login-wrap"><form class="login card" id="joinForm"><div class="theme-row">${themeBtn()}</div><h1><img src="${ICON}" alt=""> Team Timesheet</h1>
+    <h2 style="margin-top:0">${info.reset ? 'Choose a new password' : `Welcome, ${info.name.split(' ')[0]}`}</h2>
+    <p class="muted" style="margin-top:-4px">${info.reset ? '' : 'Your account is ready. Choose your own password to finish. '}You will sign in with <b>${info.email}</b>.</p>
+    <div class="field"><label class="f" for="np">New password <span class="muted small">(at least 8 characters)</span></label><input id="np" type="password" autocomplete="new-password" minlength="8" required></div>
+    <div class="field"><label class="f" for="np2">Repeat password</label><input id="np2" type="password" autocomplete="new-password" minlength="8" required></div>
+    <label class="row small" style="margin-bottom:10px"><input type="checkbox" id="showpw" style="width:20px;height:20px"> Show password</label>
+    <div class="err-text" id="jerr" role="alert"></div><button class="btn primary block" type="submit">${info.reset ? 'Save new password' : 'Activate my account'}</button></form></div>`);
+  $('#showpw').onchange = (e) => { $('#np').type = $('#np2').type = e.target.checked ? 'text' : 'password'; };
+  $('#joinForm').onsubmit = async (e) => {
+    e.preventDefault();
+    if ($('#np').value !== $('#np2').value) return ($('#jerr').textContent = 'The two passwords are different.');
+    try { await post('/invite/accept', { token, password: $('#np').value }); location.hash = ''; await boot(); toast(info.reset ? 'Password changed' : 'Welcome! Your account is active.'); }
+    catch (er) { $('#jerr').textContent = er.message; }
   };
 }
 
@@ -372,6 +416,12 @@ async function viewGrowth(id) {
 async function viewMe() {
   shell('me', html`<div class="empty">Loading…</div>`);
   const m = await get('/me/summary'), u = m.user, th = getTheme();
+  const devices = bioSupported() ? (await get('/webauthn/credentials')).credentials : [];
+  const bioCard = window.DEMO ? html`<p class="muted">Available in the live app. It lets you sign in with your fingerprint, face or screen lock instead of typing your password.</p>`
+    : !bioSupported() ? html`<p class="muted">This browser or address does not support fingerprint / face sign-in. Open the app from your phone or laptop over https.</p>`
+    : html`<p class="muted" style="margin-top:-4px">Sign in with your fingerprint, face or screen lock instead of typing your password. Your biometrics never leave your device.</p>
+        ${devices.length ? html`<div class="items">${devices.map((d) => html`<div class="item row sp"><div><b>${d.label}</b><div class="small muted">Added ${d.created_at.slice(0, 10)}${d.last_used ? ' · used ' + d.last_used.slice(0, 10) : ''}</div></div><button class="btn sm danger" data-act="bioRemove" data-id="${d.id}">Remove</button></div>`)}</div>` : ''}
+        <div class="row" style="margin-top:${devices.length ? 12 : 0}px"><button class="btn primary" data-act="bioEnable">${raw(ICONS.finger)} ${devices.length ? 'Enable on another device' : 'Enable on this device'}</button></div>`;
   const projs = m.led_projects.length ? m.led_projects : m.worked_projects;
   mount($('#view'), html`<h1>Settings</h1>
     <div class="card profile"><div class="avatar" aria-hidden="true">${u.name.split(' ').map((w) => w[0]).slice(0, 2).join('')}</div>
@@ -388,6 +438,7 @@ async function viewMe() {
     <div class="card" style="margin-top:14px"><h2>${m.led_projects.length ? 'Projects assigned to you' : 'Your projects'}</h2>
       <p class="small muted" style="margin-top:-4px">${m.led_projects.length ? 'You are team leader of these projects.' : 'Projects you logged time on in the last 90 days.'}</p>
       ${projs.length ? html`<div class="items">${projs.map((p) => html`<div class="item row sp"><div><b>${p.name}</b> <span class="muted small">· ${p.scope || '–'}</span></div>${p.days != null ? html`<span class="small"><b>${Math.round(p.days * m.hours_per_day)}h</b> <span class="muted">· last ${shortDate(p.last)}</span></span>` : html`<a class="btn sm" href="#dash-${p.id}">Dashboard</a>`}</div>`)}</div>` : html`<div class="empty">No projects yet.</div>`}</div>
+    <div class="card" id="bioCard"><h2>Fingerprint / face sign-in</h2>${bioCard}</div>
     <div class="card"><h2>Preferences</h2>
       <div class="field"><label class="f">Appearance</label><div class="chips" role="radiogroup" aria-label="Appearance">${[['auto', 'Same as device'], ['light', 'Light'], ['dark', 'Dark']].map(([k, l]) => html`<button class="chip ${th === k ? 'on' : ''}" role="radio" aria-checked="${th === k}" data-act="setTheme" data-t="${k}">${raw(THEMES[k][0])} ${l}</button>`)}</div></div>
       <div class="row"><button class="btn" data-act="pw">${raw(ICONS.key)} Change password</button><button class="btn danger" data-act="logout">${raw(ICONS.out)} Sign out</button></div></div>`);
@@ -548,14 +599,17 @@ async function viewProd() {
 async function viewTeam() {
   shell('team', html`<div class="empty">Loading…</div>`);
   const { users } = await get('/users');
-  const admin = isAdmin();
-  mount($('#view'), html`<div class="row sp"><h1>Team</h1>${admin ? html`<button class="btn primary" data-act="userAdd">+ Add person</button>` : ''}</div>
-    <div class="card"><div class="tscroll"><table><tr><th>Name</th><th>Access</th><th>Level</th><th>Start date</th><th>Last entry</th><th class="right">Days (30d)</th><th></th></tr>
-    ${users.map((u) => html`<tr style="${u.active ? '' : 'opacity:.5'}"><td><a href="#growth-${u.id}"><b>${u.name}</b></a><div class="small muted">${u.email || html`<span class="tag warn">no email</span>`}${u.team ? ' · ' + u.team : ''}</div></td><td><span class="tag">${u.role}</span></td><td>${u.level || '–'}</td>
-      <td class="nowrap small">${u.start_date || '–'}</td><td>${u.role === 'admin' ? '' : rel(u.last_entry)}</td><td class="right">${fmtD(u.days_30d)}</td><td class="right nowrap"><a class="btn sm" href="#growth-${u.id}">Growth</a> ${admin ? html`<button class="btn sm" data-act="userEdit" data-id="${u.id}">Edit</button>` : ''}</td></tr>`)}</table></div></div>`);
   window._users = users;
+  const admin = isAdmin(), roleName = { admin: 'Admin', leader: 'Team leader', member: 'Team member' };
+  mount($('#view'), html`<div class="row sp"><h1>Team & roles</h1>${admin ? html`<button class="btn primary" data-act="userAdd">+ Add team member</button>` : ''}</div>
+    <p class="muted small" style="margin-top:-6px">Add a person with their work email. They get an email to choose their own password, then sign in with that email.</p>
+    <div class="card"><div class="tscroll"><table><tr><th>Name & email</th><th>Role</th><th>Status</th><th>Level</th><th>Start date</th><th>Last entry</th><th></th></tr>
+    ${users.map((u) => html`<tr style="${u.active ? '' : 'opacity:.5'}"><td><b>${u.name}</b><div class="small muted">${u.email || html`<span class="tag warn">no email</span>`}${u.team ? ' · ' + u.team : ''}</div></td>
+      <td><span class="tag ${u.role === 'admin' ? 'brand' : ''}">${roleName[u.role] || u.role}</span></td>
+      <td>${!u.active ? html`<span class="tag bad">Inactive</span>` : u.invited ? html`<span class="tag warn">Invited</span>` : html`<span class="tag good">Active</span>`}</td>
+      <td>${u.level || '–'}</td><td class="nowrap small">${u.start_date || '–'}</td><td>${u.role === 'admin' ? '' : rel(u.last_entry)}</td>
+      <td class="right nowrap">${u.role !== 'admin' ? html`<a class="btn sm" href="#growth-${u.id}">Career</a> ` : ''}${admin ? html`<button class="btn sm" data-act="userInvite" data-id="${u.id}" title="${u.invited ? 'Send the invitation again' : 'Send a password reset link'}">${u.invited ? 'Resend invite' : 'Reset link'}</button> <button class="btn sm" data-act="userEdit" data-id="${u.id}">Edit</button>` : ''}</td></tr>`)}</table></div></div>`);
 }
-
 
 // ---------- PROJECTS (leaders propose, admin approves) ----------
 async function viewProjects() {
@@ -709,7 +763,7 @@ const actions = {
   demoReset: async () => { if (await ask('Reset the preview data to its starting state? Your changes in this browser are discarded.', { ok: 'Reset', danger: true })) window.DEMO.reset(); },
   logout: async () => { await post('/logout'); me = null; renderLogin(); },
   pw: async () => {
-    const v = await formDialog({ title: 'Change password', submit: 'Change', fields: [fld('current', 'Current password', { type: 'password', required: true, autocomplete: 'current-password' }), fld('next', 'New password (6+ characters)', { type: 'password', required: true, autocomplete: 'new-password' })] });
+    const v = await formDialog({ title: 'Change password', submit: 'Change', fields: [fld('current', 'Current password', { type: 'password', required: true, autocomplete: 'current-password' }), fld('next', 'New password (8+ characters)', { type: 'password', required: true, autocomplete: 'new-password' })] });
     if (v) attempt(() => post('/me/password', v), 'Password changed');
   },
   goEdit: (el) => { L.date = el.dataset.date; L._openEdit = Number(el.dataset.id); },
@@ -784,6 +838,25 @@ const actions = {
   tlSort: (el) => { const k = el.dataset.k; TL.dir = TL.sort === k ? -TL.dir : k === 'date' || k === 'days' ? -1 : 1; TL.sort = k; drawSheet(); },
   tlLatest: () => { TL.to = window._tlLatest; TL.from = addDays(TL.to, -13); viewTeamLog(); },
   tlDel: async (el) => { if (await ask('Delete this timesheet line?', { ok: 'Delete', danger: true }) && await attempt(() => del('/entries/' + el.dataset.id), 'Deleted')) viewTeamLog(); },
+  userInvite: async (el) => {
+    const u = window._users.find((x) => x.id === Number(el.dataset.id));
+    if (!u.email) return toast('Add their email first (Edit)', true);
+    if (!(await ask(u.invited ? `Send the invitation again to ${u.email}?` : `Send ${u.name} a link to choose a new password?`, { ok: 'Send' }))) return;
+    const r = await attempt(() => post(`/users/${u.id}/invite`, { origin: siteOrigin() })); if (r) showInvite(r, u.name, u.email);
+  },
+  copyLink: async () => { const i = $('#invLink'); i.select(); try { await navigator.clipboard.writeText(i.value); toast('Link copied'); } catch { document.execCommand?.('copy'); toast('Press Ctrl+C to copy'); } },
+  forgot: async () => {
+    const v = await formDialog({ title: 'Forgot your password?', submit: 'Email me a link', fields: [fld('email', 'Your work email', { type: 'email', required: true, autocomplete: 'email' })], values: { email: $('#u')?.value || '' } });
+    if (v && await attempt(() => post('/forgot', { email: v.email, origin: siteOrigin() }))) infoDialog('Check your email', html`<p>If <b>${v.email}</b> has an account, a link to choose a new password is on its way. It works for 2 days.</p><p class="small muted">Nothing arrived? Ask your admin to send you a link.</p>`);
+  },
+  toLogin: () => { location.hash = ''; renderLogin(); },
+  bioLogin: async () => { try { await bioLogin(); await boot(); } catch (e) { $('#lerr').textContent = waMessage(e); } },
+  bioEnable: async () => {
+    const v = await formDialog({ title: 'Enable fingerprint / face sign-in', submit: 'Continue', fields: [fld('label', 'Name this device', { required: true, help: 'For example “My phone”. Your phone or laptop will ask for your fingerprint, face or screen lock.' })], values: { label: /iPhone|iPad/.test(navigator.userAgent) ? 'My iPhone' : /Android/.test(navigator.userAgent) ? 'My Android phone' : /Mac/.test(navigator.userAgent) ? 'My Mac' : /Windows/.test(navigator.userAgent) ? 'My Windows PC' : 'This device' } });
+    if (!v) return;
+    try { await bioEnable(v.label); toast('Biometric sign-in is on for this device'); viewMe(); } catch (e) { toast(waMessage(e), true); }
+  },
+  bioRemove: async (el) => { if (await ask('Remove this device? You can still sign in with your password.', { ok: 'Remove', danger: true }) && await attempt(() => del('/webauthn/credentials/' + el.dataset.id), 'Removed')) viewMe(); },
   userAdd: () => userForm(), userEdit: (el) => userForm(window._users.find((u) => u.id === Number(el.dataset.id))),
   projAdd: () => projectForm(), projEdit: (el) => projectForm(byId(catalog.projects, el.dataset.id)),
   taskAdd: () => taskForm(), taskEdit: (el) => taskForm(byId(catalog.task_types, el.dataset.id)),
@@ -833,20 +906,32 @@ async function levelForm(ex) {
   const v = await formDialog({ title: ex ? 'Edit level' : 'New level', fields: [fld('name', 'Name', { required: true }), fld('rank', 'Order (1 = lowest)', { type: 'number', required: true, default: catalog.levels.length + 1 }), fld('description', 'What this level means', { type: 'textarea' })], values: ex || {} });
   if (v && await attempt(() => (ex ? put('/levels/' + ex.id, v) : post('/levels', v)), 'Saved')) viewSetup();
 }
+async function showInvite(r, name, email) {
+  const sent = r.email_status === 'sent';
+  r = { ...r, link: r.link || (r.token ? location.href.split('#')[0] + '#join-' + r.token : '') };
+  infoDialog(sent ? 'Invitation sent' : 'Share this sign-in link', html`<p>${sent ? html`An email with a link to choose a password was sent to <b>${email}</b>.` : html`<b>${name}</b>'s account is ready, but this server cannot send email yet. Copy the link below and send it to them (WhatsApp, Teams or email).`}</p>
+    ${r.link ? html`<div class="copybox"><input id="invLink" type="text" readonly value="${r.link}" aria-label="Sign-in link"><button class="btn sm primary" type="button" data-act="copyLink">Copy</button></div><p class="small muted">The link works once and expires in 7 days.</p>` : html`<p class="muted small">Could not build the link.</p>`}`);
+}
 async function userForm(u) {
   const { leaders } = await get('/leaders');
-  const fields = [fld('name', 'Full name', { required: true }), ...(u ? [] : [fld('username', 'Username', { required: true, autocomplete: 'off' })]),
-    fld('email', 'Work email (for reminders)', { type: 'email' }),
-    fld('password', u ? 'Reset password (leave empty to keep)' : 'Initial password (6+)', { type: 'password', required: !u, autocomplete: 'new-password' }),
-    fld('job_title', 'Job title'), fld('team', 'Team / department'),
-    fld('start_date', 'Start date', { type: 'date', help: 'Days before this date are never counted as missing — no reminders, no follow-up flags.' }),
-    fld('role', 'Access', { type: 'select', options: [{ value: 'member', label: 'Team member' }, { value: 'leader', label: 'Team leader (sees own team)' }, { value: 'admin', label: 'Admin (sees everything)' }] }),
-    fld('leader_id', 'Reports to', { type: 'select', options: [{ value: '', label: '— none —' }, ...leaders.filter((l) => l.id !== u?.id).map((l) => ({ value: l.id, label: l.name }))] })];
-  if (!u) fields.push(fld('level_id', 'Starting level', { type: 'select', options: [{ value: '', label: '—' }, ...catalog.levels.map((l) => ({ value: l.id, label: l.name }))] }));
-  if (u) fields.push(fld('active', 'Active (can sign in, gets reminders)', { type: 'checkbox' }));
-  const v = await formDialog({ title: u ? 'Edit person' : 'Add person', fields, values: u ? { ...u, leader_id: u.leader_id ?? '' } : { role: 'member', team: 'BIM', start_date: today() } });
+  const role = [{ value: 'member', label: 'Team member — logs time, sees own career' }, { value: 'leader', label: 'Team leader — also sees the projects assigned to them' }, { value: 'admin', label: 'Admin — sees and manages everything' }];
+  const fields = u
+    ? [fld('name', 'Full name', { required: true }), fld('email', 'Work email', { type: 'email', required: true, help: u.invited ? 'Not activated yet: changing the email sends a new invitation to the new address.' : 'They sign in with this email.' }),
+       fld('role', 'Role', { type: 'select', options: role }), fld('job_title', 'Job title'), fld('team', 'Team / department'),
+       fld('start_date', 'Start date', { type: 'date', help: 'Days before this date are never counted as missing.' }),
+       fld('leader_id', 'Reports to', { type: 'select', options: [{ value: '', label: '— none —' }, ...leaders.filter((l) => l.id !== u.id).map((l) => ({ value: l.id, label: l.name }))] }),
+       fld('active', 'Active (can sign in and gets reminders)', { type: 'checkbox' })]
+    : [fld('name', 'Full name', { required: true }), fld('email', 'Work email', { type: 'email', required: true, help: 'An account is created with this email. They choose their own password from the email we send.' }),
+       fld('role', 'Role', { type: 'select', options: role }), fld('job_title', 'Job title'), fld('team', 'Team / department'),
+       fld('start_date', 'Start date', { type: 'date', help: 'Days before this date are never counted as missing.' }),
+       fld('leader_id', 'Reports to', { type: 'select', options: [{ value: '', label: '— none —' }, ...leaders.map((l) => ({ value: l.id, label: l.name }))] }),
+       fld('level_id', 'Starting level', { type: 'select', options: [{ value: '', label: '—' }, ...catalog.levels.map((l) => ({ value: l.id, label: l.name }))] })];
+  const v = await formDialog({ title: u ? 'Edit team member' : 'Add team member', submit: u ? 'Save' : 'Create & send invite', fields, values: u ? { ...u, leader_id: u.leader_id ?? '' } : { role: 'member', team: 'BIM', start_date: today() } });
   if (!v) return;
-  if (await attempt(() => (u ? put('/users/' + u.id, v) : post('/users', v)), 'Saved')) viewTeam();
+  const r = await attempt(() => (u ? put('/users/' + u.id, { ...v, origin: siteOrigin() }) : post('/users', { ...v, origin: siteOrigin() })), u ? 'Saved' : '');
+  if (!r) return;
+  await viewTeam();
+  if (!u) showInvite(r, v.name, v.email); else if (r.link !== undefined) showInvite(r, v.name, v.email);
 }
 async function careerForm(u) {
   const v = await formDialog({ title: u ? 'Edit' : 'Add a goal or milestone', submit: u ? 'Save' : 'Add', fields: [
@@ -891,8 +976,9 @@ document.addEventListener('change', (e) => {
 // ---------- routing ----------
 async function loadCatalog() { catalog = await get('/catalog'); }
 async function route() {
+  const h = location.hash.replace(/^#\/?/, ''), jm = h.match(/^join-([0-9a-f]{20,})$/);
+  if (jm) return renderJoin(jm[1]);
   if (!me) return renderLogin();
-  const h = location.hash.replace(/^#\/?/, '');
   const [page = 'log', arg] = h.includes('/') ? h.split('/') : (h.match(/^([a-z]+)(?:-(\d+))?$/) || [, '']).slice(1);
   if (!page) { location.hash = home(); return; }
   const notAdmin = () => !isAdmin();
@@ -921,6 +1007,7 @@ window.addEventListener('hashchange', route);
 
 async function boot() {
   try { ({ user: me } = await get('/me')); await loadCatalog(); } catch { me = null; }
+  if (/^#\/?join-/.test(location.hash)) return route(); // invitation link: choose a password first
   if (!me) return renderLogin();
   if (!location.hash) location.hash = home();
   route();

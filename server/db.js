@@ -3,7 +3,7 @@ import { scryptSync, randomBytes, timingSafeEqual } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 
-const DB_PATH = process.env.DB_PATH || new URL('../data/timesheet.db', import.meta.url).pathname;
+export const DB_PATH = process.env.DB_PATH || new URL('../data/timesheet.db', import.meta.url).pathname;
 mkdirSync(dirname(DB_PATH), { recursive: true });
 
 export const db = new DatabaseSync(DB_PATH);
@@ -31,6 +31,13 @@ CREATE TABLE IF NOT EXISTS users (
   start_date TEXT,
   active INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+-- passkeys: one row per enrolled device (biometric / device PIN sign-in)
+CREATE TABLE IF NOT EXISTS webauthn_credentials (
+  id TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  public_jwk TEXT NOT NULL, alg INTEGER NOT NULL, sign_count INTEGER NOT NULL DEFAULT 0,
+  label TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL DEFAULT (datetime('now')), last_used TEXT
 );
 CREATE TABLE IF NOT EXISTS sessions (
   token TEXT PRIMARY KEY,
@@ -140,6 +147,11 @@ CREATE TABLE IF NOT EXISTS project_proposals (
 );
 CREATE TABLE IF NOT EXISTS job_runs (job TEXT NOT NULL, run_date TEXT NOT NULL, ran_at TEXT NOT NULL DEFAULT (datetime('now')), PRIMARY KEY (job, run_date));
 `);
+
+// accounts are created by the admin with a work email; the person sets their own password from an emailed link
+for (const [col, ddl] of [['invite_hash', "TEXT NOT NULL DEFAULT ''"], ['invite_expires', 'INTEGER NOT NULL DEFAULT 0']]) {
+  if (!db.prepare('PRAGMA table_info(users)').all().some((c) => c.name === col)) db.exec(`ALTER TABLE users ADD COLUMN ${col} ${ddl}`);
+}
 
 // ---------- settings ----------
 export const SETTING_DEFAULTS = {

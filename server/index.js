@@ -6,6 +6,7 @@ import { dispatch } from './api.js';
 import { db, seedIfEmpty } from './db.js';
 import { startScheduler } from './notifications.js';
 import { smtpConfigured } from './mailer.js';
+import { startBackups } from './backup.js';
 
 const PUBLIC = new URL('../public/', import.meta.url).pathname;
 const PORT = Number(process.env.PORT || 3000);
@@ -32,9 +33,10 @@ const server = http.createServer(async (req, res) => {
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Referrer-Policy', 'same-origin');
   try {
+    if (url.pathname === '/healthz') { res.writeHead(200, { 'Content-Type': 'text/plain' }); return res.end('ok'); }
     if (url.pathname.startsWith('/api/')) {
       const rawBody = ['POST', 'PUT', 'DELETE'].includes(req.method) ? await readBody(req) : '';
-      const r = await dispatch({ method: req.method, pathname: url.pathname, searchParams: url.searchParams, headers: req.headers, rawBody, ip: req.socket.remoteAddress });
+      const r = await dispatch({ method: req.method, pathname: url.pathname, searchParams: url.searchParams, headers: req.headers, rawBody, ip: (process.env.TRUST_PROXY === '1' && String(req.headers['x-forwarded-for'] || '').split(',')[0].trim()) || req.socket.remoteAddress });
       res.writeHead(r.status, r.headers);
       res.end(r.body);
     } else await handleStatic(req, res, url);
@@ -53,4 +55,7 @@ server.listen(PORT, () => {
   console.log(`Email: ${smtpConfigured() ? 'SMTP configured — reminders will really be sent' : 'SMTP not configured — emails are only recorded (see the Emails tab)'}`);
   if (seeded.createdAdmin) console.log(`\n  First run — admin account created:\n    username: admin\n    password: ${seeded.adminPassword ?? '(from ADMIN_PASSWORD)'}\n  Change it after signing in.\n`);
   startScheduler();
+  startBackups();
 });
+process.on('unhandledRejection', (e) => console.error('[unhandled]', e));
+for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => { console.log(`${sig}: shutting down`); server.close(); try { db.close(); } catch { /* already closed */ } process.exit(0); });

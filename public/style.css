@@ -194,3 +194,12 @@ a.btn{text-decoration:none;display:inline-flex;align-items:center;gap:6px}
 .sheet tfoot td{position:sticky;bottom:0;background:color-mix(in srgb,var(--brand) 9%,var(--surface));font-weight:600}
 
 .wrap.wide{max-width:1500px}
+
+/* sign-in extras */
+.linklike{all:unset;cursor:pointer;color:var(--brand);font-size:.9rem;text-decoration:underline}
+.linklike:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+.bio-btn{display:inline-flex;align-items:center;justify-content:center;gap:10px;min-height:52px;font-size:1.02rem;margin-bottom:12px}
+.bio-btn svg{width:24px;height:24px}
+.or{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:.85rem;margin:2px 0 14px}
+.or::before,.or::after{content:"";flex:1;height:1px;background:var(--line)}
+.copybox{display:flex;gap:8px}.copybox input{flex:1;min-width:0;font-size:.85rem}
