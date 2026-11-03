@@ -1,11 +1,17 @@
 // Browser preview: runs the real API (server/api.js) on an in-browser SQLite and routes the app's fetch('/api/…') to it.
-const KEY = 'ts-demo-db-v1', SID = 'ts-demo-sid-v1';
+const REAL = __PREVIEW_DATA__;
+const KEY = REAL ? 'ts-preview-real-v1' : 'ts-demo-db-v1', SID = KEY + '-sid';
 const store = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch {} }, del: (k) => { try { localStorage.removeItem(k); } catch {} } };
 let sid = store.get(SID) || '';
 
 window.DEMO = {
   icon: __ICON__,
-  logins: [
+  real: !!REAL,
+  logins: REAL ? [
+    { label: 'Admin — sees everything', u: 'admin', p: 'admin' },
+    { label: 'Team leader — Marwan Yousef', u: 'm.yousef', p: 'demo' },
+    { label: 'Team member — Hamadi Hayyan', u: 'hamadi.h', p: 'demo' },
+  ] : [
     { label: 'Admin — sees everything', u: 'admin', p: 'admin' },
     { label: 'Team leader — Rania Haddad', u: 'rania', p: 'demo' },
     { label: 'Team member — Omar Saleh', u: 'omar', p: 'demo' },
@@ -17,9 +23,9 @@ const ready = (async () => {
   globalThis.__SQL = await window.initSqlJs();
   globalThis.__DBKEY = KEY;
   const api = await import('../server/api.js');
-  const { seedDemo } = await import('../server/demo.js');
   api.seedIfEmpty();
-  await seedDemo();
+  if (REAL) { const { seedReal } = await import('./seed-real.js'); seedReal(REAL); }
+  else { const { seedDemo } = await import('../server/demo.js'); await seedDemo(); }
   save();
   return api;
 })();

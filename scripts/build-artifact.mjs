@@ -1,14 +1,18 @@
 // Builds a single self-contained HTML preview of the app (no server): dist/team-timesheet.html
 import { build } from 'esbuild';
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 const root = new URL('..', import.meta.url).pathname;
 const icon = 'data:image/svg+xml;base64,' + Buffer.from(readFileSync(root + 'public/icon.svg')).toString('base64');
 const shim = (f) => root + 'demo/shims/' + f;
+// PREVIEW_DATA=data/preview-data.json → preview with the team's own data (keep that file out of git); otherwise fictional sample data
+const dataPath = process.env.PREVIEW_DATA && root + process.env.PREVIEW_DATA;
+const realData = dataPath && existsSync(dataPath) ? readFileSync(dataPath, 'utf8') : 'null';
+if (process.env.PREVIEW_DATA && realData === 'null') throw new Error('PREVIEW_DATA file not found: ' + dataPath);
 const out = await build({
   entryPoints: [root + 'demo/entry.js'], bundle: true, format: 'iife', platform: 'browser', target: 'es2020', minify: true, write: false, legalComments: 'none',
   alias: { 'node:sqlite': shim('sqlite.js'), 'node:crypto': shim('crypto.js'), 'node:fs': shim('misc.js'), 'node:path': shim('misc.js'), nodemailer: shim('misc.js'), 'write-excel-file/node': shim('excel.js') },
   inject: [shim('inject.js')],
-  define: { 'import.meta.url': '"https://preview.local/server/db.js"', __ICON__: JSON.stringify(icon) },
+  define: { 'import.meta.url': '"https://preview.local/server/db.js"', __ICON__: JSON.stringify(icon), __PREVIEW_DATA__: realData },
 });
 const safe = (js) => js.replace(/<\/script/gi, '<\\/script');
 const sqljs = readFileSync(root + 'node_modules/sql.js/dist/sql-asm-memory-growth.js', 'utf8');

@@ -115,7 +115,7 @@ if (getTheme() !== 'auto') applyTheme(getTheme());
 // ---------- state ----------
 let me = null, catalog = { projects: [], task_types: [], scopes: [], levels: [], settings: {} };
 const ICON = window.DEMO?.icon || '/icon.svg';
-const demoStrip = () => (window.DEMO ? html`<div class="demo-strip">Preview with made-up sample data, saved only in this browser. <button type="button" data-act="demoReset">Reset sample data</button></div>` : '');
+const demoStrip = () => (window.DEMO ? html`<div class="demo-strip">${window.DEMO.real ? 'Preview with a copy of your team timesheet data' : 'Preview with made-up sample data'}, saved only in this browser. <button type="button" data-act="demoReset">Reset to start</button></div>` : '');
 const isMgr = () => me && (me.role === 'admin' || me.role === 'leader');
 const isAdmin = () => me?.role === 'admin';
 const activeProjects = () => catalog.projects.filter((p) => p.active && !p.is_leave);
@@ -143,7 +143,7 @@ function renderLogin() {
     <div class="field"><label class="f" for="u">Username or work email</label><input id="u" type="text" autocomplete="username" autocapitalize="none" required></div>
     <div class="field"><label class="f" for="p">Password</label><input id="p" type="password" autocomplete="current-password" required></div>
     <div class="err-text" id="lerr"></div><button class="btn primary block" type="submit">Sign in</button>
-    ${window.DEMO ? html`<div class="demo-logins"><div class="small muted">Preview with sample data — sign in as:</div>${window.DEMO.logins.map((l) => html`<button class="btn" type="button" data-act="demoLogin" data-u="${l.u}" data-p="${l.p}">${l.label}</button>`)}</div>` : ''}</form></div>`);
+    ${window.DEMO ? html`<div class="demo-logins"><div class="small muted">Preview — sign in as:</div>${window.DEMO.logins.map((l) => html`<button class="btn" type="button" data-act="demoLogin" data-u="${l.u}" data-p="${l.p}">${l.label}</button>`)}</div>` : ''}</form></div>`);
   $('#loginForm').onsubmit = async (e) => {
     e.preventDefault();
     try { await post('/login', { username: $('#u').value, password: $('#p').value }); await boot(); }
@@ -325,7 +325,7 @@ async function viewGrowth(id) {
 }
 
 // ---------- DASHBOARD ----------
-const D = { days: 30, project: null };
+const D = { days: window.DEMO?.real ? 180 : 30, project: null };
 const rangeSel = (act, cur) => html`<select data-change="${act}" style="width:auto">${[[7, 'Last 7 days'], [30, 'Last 30 days'], [90, 'Last 90 days'], [180, 'Last 6 months']].map(([d, l]) => html`<option value="${d}" ${cur === d ? raw('selected') : ''}>${l}</option>`)}</select>`;
 const bars = (rows, { label, value, text, cls = () => '' }) => {
   const max = Math.max(...rows.map(value), 0.0001);
@@ -562,7 +562,7 @@ const actions = {
   ...logActions,
   theme: () => cycleTheme(),
   demoLogin: async (el) => { $('#u').value = el.dataset.u; $('#p').value = el.dataset.p; $('#loginForm').requestSubmit(); },
-  demoReset: async () => { if (await ask('Reset all sample data to the starting state?', { ok: 'Reset', danger: true })) window.DEMO.reset(); },
+  demoReset: async () => { if (await ask('Reset the preview data to its starting state? Your changes in this browser are discarded.', { ok: 'Reset', danger: true })) window.DEMO.reset(); },
   logout: async () => { await post('/logout'); me = null; renderLogin(); },
   pw: async () => {
     const v = await formDialog({ title: 'Change password', submit: 'Change', fields: [fld('current', 'Current password', { type: 'password', required: true, autocomplete: 'current-password' }), fld('next', 'New password (6+ characters)', { type: 'password', required: true, autocomplete: 'new-password' })] });
