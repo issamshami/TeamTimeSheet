@@ -8,6 +8,10 @@ const clean = (v) => String(v ?? '').replace(/\s+/g, ' ').trim();
 export function seedReal(data, { password = 'demo' } = {}) {
   if (db.prepare("SELECT COUNT(*) c FROM users WHERE role<>'admin'").get().c > 0) return null;
   const pw = hashPassword(password), today = localNow('Asia/Riyadh').date;
+  if (data.admin_email) { // the admin signs in with this email; weekly reports and alerts go here
+    db.prepare("UPDATE users SET email=? WHERE username='admin'").run(String(data.admin_email).toLowerCase());
+    setSettings({ admin_email: String(data.admin_email).toLowerCase() });
+  }
   db.exec('BEGIN');
   const scopeId = (n) => { n = clean(n) || 'None'; let r = db.prepare('SELECT id FROM scopes WHERE name=?').get(n); if (!r) r = { id: Number(db.prepare('INSERT INTO scopes (name) VALUES (?)').run(n).lastInsertRowid) }; return r.id; };
   const itemId = (raw) => {

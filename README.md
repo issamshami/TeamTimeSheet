@@ -11,7 +11,7 @@ The app needs a small always-on server with a **persistent disk** and **https**.
 1. Sign in at <https://dashboard.render.com> and connect your GitHub account.
 2. **New → Blueprint**, choose this repository. `render.yaml` sets everything up (Docker, 1 GB disk, health check, https).
    The disk needs a paid instance (starter plan).
-3. When asked, fill in: `ADMIN_PASSWORD` (your first password), `ADMIN_EMAIL`, `APP_URL` (the address Render shows,
+3. When asked, fill in: `ADMIN_PASSWORD` (your first password), `ADMIN_EMAIL` (your work email: it becomes the admin's sign-in email and the address for the weekly report), `APP_URL` (the address Render shows,
    e.g. `https://team-timesheet.onrender.com`), and the email settings below (can be added later).
 4. Open the address, sign in as `admin` (or with `ADMIN_EMAIL`) and the password you chose.
 5. Share the address with the team. They install it on their phone from the browser menu (“Add to Home Screen”).

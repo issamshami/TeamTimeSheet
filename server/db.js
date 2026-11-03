@@ -225,7 +225,11 @@ export function seedIfEmpty() {
     out.adminPassword = process.env.ADMIN_PASSWORD ? null : pw;
     out.createdAdmin = true;
   }
-  if (process.env.ADMIN_EMAIL && !getSettings().admin_email) setSettings({ admin_email: process.env.ADMIN_EMAIL });
+  if (process.env.ADMIN_EMAIL) { // also applies when the admin already exists without an email
+    const e = process.env.ADMIN_EMAIL.trim().toLowerCase();
+    db.prepare("UPDATE users SET email=? WHERE id=(SELECT MIN(id) FROM users WHERE role='admin') AND email=''").run(e);
+    if (!getSettings().admin_email) setSettings({ admin_email: e });
+  }
   if (process.env.APP_URL && !getSettings().app_url) setSettings({ app_url: process.env.APP_URL });
   return out;
 }
