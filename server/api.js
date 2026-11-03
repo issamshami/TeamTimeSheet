@@ -285,7 +285,8 @@ PUT('/api/entries/:id', ({ user, body, params }) => {
 });
 DEL('/api/entries/:id', ({ user, params }) => { ownEntry(user, params.id); db.prepare('DELETE FROM entries WHERE id=?').run(params.id); return { ok: true }; });
 
-GET('/api/suggest', ({ user, query }) => suggest(user.id, {
+// admin may load suggestions for the person they are logging for
+GET('/api/suggest', ({ user, query }) => suggest(user.role === 'admin' && query.user_id ? Number(query.user_id) : user.id, {
   projectId: query.project_id ? Number(query.project_id) : null,
   taskTypeId: query.task_type_id ? Number(query.task_type_id) : null,
   text: query.text || '', date: query.date && isDate(query.date) ? query.date : undefined,

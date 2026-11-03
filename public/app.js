@@ -141,7 +141,7 @@ NI.menu = svg('<path d="M4 7h16M4 12h16M4 17h16"/>');
 NI.clock = svg('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>');
 NI.cal = svg('<rect x="4" y="5" width="16" height="16" rx="2"/><path d="M8 3v4M16 3v4M4 10h16M8 14h.01M12 14h.01M16 14h.01M8 17.5h.01M12 17.5h.01"/>');
 const navFor = () => (isAdmin()
-  ? { left: [['dash', 'Home — dashboard', NI.home], ['teamlog', 'Team log', NI.log]], plus: null, right: [['careers', 'Careers', NI.people], ['setup', 'Setup', NI.menu, () => catalog.pending_proposals]] }
+  ? { left: [['dash', 'Home — dashboard', NI.home], ['teamlog', 'Team log', NI.log]], plus: ['log', 'New entry'], right: [['careers', 'Careers', NI.people], ['setup', 'Setup', NI.menu, () => catalog.pending_proposals]] }
   : { left: [['dash', 'Home — dashboard', NI.home], ['history', 'My log', NI.log]], plus: ['log', 'New entry'], right: [['growth', 'Career & goals', NI.people], ['me', 'Settings', NI.menu]] });
 // sub-pages light up the icon they belong to
 const NAV_PARENT = { prod: 'dash', export: 'dash', projects: 'dash', team: 'setup', lists: 'setup', emails: 'setup' };
@@ -180,20 +180,21 @@ function renderLogin() {
 }
 
 // ---------- LOG TIME ----------
-const L = { date: null, project_id: null, task_type_id: null, scope_id: null, scopeManual: false, days: null, qty: '', desc: '', editId: null, sug: null, entries: [] };
+const L = { forUser: null, people: null, date: null, project_id: null, task_type_id: null, scope_id: null, scopeManual: false, days: null, qty: '', desc: '', editId: null, sug: null, entries: [] };
 const DAY_CHIPS = [1, 0.75, 0.5, 0.25, 0.2, 0.1];
 const dayTotal = (exceptId) => L.entries.filter((e) => e.id !== exceptId).reduce((s, e) => s + e.days, 0);
 
 async function loadSuggest() {
   try {
-    L.sug = await get('/suggest' + qs({ project_id: L.project_id, task_type_id: L.task_type_id, text: L.desc, date: L.date }));
+    L.sug = await get('/suggest' + qs({ project_id: L.project_id, task_type_id: L.task_type_id, text: L.desc, date: L.date, user_id: L.forUser }));
     if (L.project_id && !L.scopeManual && L.sug.scope_id) L.scope_id = L.sug.scope_id;
   } catch { L.sug = null; }
 }
 async function viewLog() {
   L.date ||= today();
   shell('log', html`<div class="empty">Loading…</div>`);
-  const [, e] = await Promise.all([loadSuggest(), get('/entries' + qs({ date: L.date }))]);
+  if (isAdmin() && !L.people) L.people = (await get('/users')).users.filter((u) => u.active);
+  const [, e] = await Promise.all([loadSuggest(), get('/entries' + qs({ date: L.date, user_id: L.forUser }))]);
   L.entries = e.entries;
   if (!L.project_id && L.sug?.projects[0]?.confidence >= 0.35) { L.project_id = L.sug.projects[0].id; await loadSuggest(); }
   drawLog();
@@ -225,6 +226,7 @@ function drawLog() {
     ${sug.combos.length && !L.editId ? html`<div class="card"><h3>⚡ Repeat something recent</h3><div class="chips">${sug.combos.map((c, i) => html`<button class="chip combo" data-act="combo" data-i="${i}"><b>${byId(catalog.projects, c.project_id)?.name}</b> · ${fmtD(c.days)}d<br>${byId(catalog.task_types, c.task_type_id)?.name}${c.description ? ' — ' + c.description : ''}</button>`)}</div></div>` : ''}
     <div class="card">
       <h2>${L.editId ? 'Edit entry' : 'New entry'}</h2>
+      ${isAdmin() && L.people ? html`<div class="field"><label class="f" for="forSel">Entry for</label><select id="forSel">${L.people.map((u) => html`<option value="${u.id}" ${(L.forUser || me.id) === u.id ? raw('selected') : ''}>${u.id === me.id ? 'Me (' + u.name + ')' : u.name}</option>`)}</select></div>` : ''}
       <div class="field"><label class="f">Project ${top.length ? html`<span class="muted small">— suggested for you</span>` : ''}</label>
         <div class="chips">${top.map((p) => html`<button class="chip ${p.id === L.project_id ? 'on' : ''}" data-act="pickProject" data-id="${p.id}">${p.name}${conf[p.id] >= 0.1 ? html`<span class="pct">${Math.round(conf[p.id] * 100)}%</span>` : ''}</button>`)}</div>
         <select id="projSel" style="margin-top:8px"><option value="">${top.length ? 'Other project…' : 'Choose project…'}</option>${projs.filter((p) => !top.includes(p)).map((p) => html`<option value="${p.id}">${p.name}</option>`)}</select></div>
@@ -271,13 +273,13 @@ const logActions = {
   dayOff: async () => {
     const p = catalog.projects.find((x) => x.is_leave && x.active), t = catalog.task_types.find((x) => x.is_leave && x.active);
     if (!p || !t) return toast('No "Day Off" project/task set up — ask the admin', true);
-    if (await attempt(() => post('/entries', { work_date: L.date, project_id: p.id, task_type_id: t.id, days: 1, description: 'Day off' }), 'Marked as day off')) viewLog();
+    if (await attempt(() => post('/entries', { work_date: L.date, project_id: p.id, task_type_id: t.id, days: 1, description: 'Day off', user_id: L.forUser }), 'Marked as day off')) viewLog();
   },
   save: async () => {
     if (!L.project_id) return toast('Pick a project', true);
     if (!L.task_type_id) return toast('Pick a task item', true);
     if (!L.days) return toast('Choose the time spent', true);
-    const body = { work_date: L.date, project_id: L.project_id, task_type_id: L.task_type_id, days: L.days, // scope always comes from the project
+    const body = { user_id: L.forUser, work_date: L.date, project_id: L.project_id, task_type_id: L.task_type_id, days: L.days, // scope always comes from the project
       quantity: L.qty === '' ? null : Number(L.qty), description: L.desc };
     const was = L.editId;
     const r = await attempt(() => (was ? put('/entries/' + was, body) : post('/entries', body)));
@@ -295,7 +297,8 @@ document.addEventListener('input', (e) => {
 });
 document.addEventListener('change', (e) => {
   const t = e.target;
-  if (t.id === 'projSel' && t.value) { L.project_id = Number(t.value); L.scopeManual = false; refreshLogParts(); }
+  if (t.id === 'forSel') { L.forUser = Number(t.value) === me.id ? null : Number(t.value); Object.assign(L, { project_id: null, editId: null, days: null, qty: '', desc: '', task_type_id: null }); viewLog(); }
+  else if (t.id === 'projSel' && t.value) { L.project_id = Number(t.value); L.scopeManual = false; refreshLogParts(); }
   else if (t.id === 'dateIn' && t.value) { L.date = t.value; resetForm(); viewLog(); }
   else if (t.id === 'daysIn') drawLog();
 });
